@@ -267,20 +267,14 @@ func (r *PGXRepository) createBookingOnce(ctx context.Context, request CreateBoo
 	if err != nil {
 		return CreateBookingResult{}, fmt.Errorf("%w: stored staff timezone %q: %v", ErrInvalidInput, member.Timezone, err)
 	}
-	localDate := request.StartsAt.In(location).Format("2006-01-02")
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO schedule_locks (tenant_id, staff_id, local_date)
-		VALUES ($1, $2, $3::date)
-		ON CONFLICT (tenant_id, staff_id, local_date) DO NOTHING`, r.tenantID, request.StaffID, localDate); err != nil {
-		return CreateBookingResult{}, fmt.Errorf("materialize schedule lock: %w", err)
-	}
-	var lockedDate string
-	if err := tx.QueryRow(ctx, `
-		SELECT local_date::text
-		FROM schedule_locks
-		WHERE tenant_id = $1 AND staff_id = $2 AND local_date = $3::date
-		FOR UPDATE`, r.tenantID, request.StaffID, localDate).Scan(&lockedDate); err != nil {
-		return CreateBookingResult{}, fmt.Errorf("lock staff schedule: %w", err)
+	endsAt := request.StartsAt.Add(service.Duration)
+	lockDates := touchedLocalDates(
+		request.StartsAt.Add(-service.BufferBefore),
+		endsAt.Add(service.BufferAfter),
+		location,
+	)
+	if err := r.acquireScheduleLocks(ctx, tx, request.StaffID, lockDates); err != nil {
+		return CreateBookingResult{}, err
 	}
 	rules, err := loadRules(ctx, tx, r.tenantID, member.ID)
 	if err != nil {
@@ -304,7 +298,6 @@ func (r *PGXRepository) createBookingOnce(ctx context.Context, request CreateBoo
 		return CreateBookingResult{}, ErrSlotUnavailable
 	}
 
-	endsAt := request.StartsAt.Add(service.Duration)
 	var booking Booking
 	err = tx.QueryRow(ctx, `
 		INSERT INTO bookings (
@@ -349,6 +342,30 @@ func (r *PGXRepository) createBookingOnce(ctx context.Context, request CreateBoo
 		return CreateBookingResult{}, fmt.Errorf("commit booking: %w", err)
 	}
 	return CreateBookingResult{Booking: booking}, nil
+}
+
+func (r *PGXRepository) acquireScheduleLocks(ctx context.Context, tx pgx.Tx, staffID string, localDates []string) error {
+	// touchedLocalDates is ascending. All writers use that order, preventing a
+	// cross-midnight booking from deadlocking another writer on the next day.
+	for _, localDate := range localDates {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO schedule_locks (tenant_id, staff_id, local_date)
+			VALUES ($1, $2, $3::date)
+			ON CONFLICT (tenant_id, staff_id, local_date) DO NOTHING`, r.tenantID, staffID, localDate); err != nil {
+			return fmt.Errorf("materialize schedule lock: %w", err)
+		}
+	}
+	for _, localDate := range localDates {
+		var lockedDate string
+		if err := tx.QueryRow(ctx, `
+			SELECT local_date::text
+			FROM schedule_locks
+			WHERE tenant_id = $1 AND staff_id = $2 AND local_date = $3::date
+			FOR UPDATE`, r.tenantID, staffID, localDate).Scan(&lockedDate); err != nil {
+			return fmt.Errorf("lock staff schedule: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *PGXRepository) loadBookingInputs(ctx context.Context, db queryer, serviceID, staffID string) (Service, Staff, error) {
@@ -569,6 +586,22 @@ func hashCreateBooking(request CreateBookingRequest) (string, error) {
 
 func minutes(duration time.Duration) int {
 	return int(duration / time.Minute)
+}
+
+func touchedLocalDates(start, end time.Time, location *time.Location) []string {
+	if !start.Before(end) {
+		return nil
+	}
+	localStart := start.In(location)
+	localLast := end.Add(-time.Nanosecond).In(location)
+	day := time.Date(localStart.Year(), localStart.Month(), localStart.Day(), 0, 0, 0, 0, location)
+	last := time.Date(localLast.Year(), localLast.Month(), localLast.Day(), 0, 0, 0, 0, location)
+	var result []string
+	for !day.After(last) {
+		result = append(result, day.Format("2006-01-02"))
+		day = day.AddDate(0, 0, 1)
+	}
+	return result
 }
 
 func rollbackTx(tx pgx.Tx) {

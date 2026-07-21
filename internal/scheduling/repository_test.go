@@ -63,6 +63,23 @@ func TestValidateCreateBooking(t *testing.T) {
 	}
 }
 
+func TestTouchedLocalDatesIncludesBufferedCrossMidnightRange(t *testing.T) {
+	t.Parallel()
+	loc := berlin(t)
+	start := time.Date(2026, time.October, 24, 23, 50, 0, 0, loc)
+	end := time.Date(2026, time.October, 26, 0, 10, 0, 0, loc)
+	got := touchedLocalDates(start, end, loc)
+	want := []string{"2026-10-24", "2026-10-25", "2026-10-26"}
+	if len(got) != len(want) {
+		t.Fatalf("touched dates = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("touched dates = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestPGXRepositoryBookingIdempotencyAndTraceShape(t *testing.T) {
 	pool, fixture := integrationFixture(t)
 	repository := NewPGXRepository(pool, "")
