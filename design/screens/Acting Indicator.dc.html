@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/styles.css">
+  <script src="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/_ds_bundle.js"></script>
+  <style>
+    html,body{margin:0}*{box-sizing:border-box}
+    @keyframes kk-act-prog{0%{transform:translateX(-100%)}100%{transform:translateX(280%)}}
+    @keyframes kk-act-pulse{0%,100%{opacity:.35;transform:scale(.8)}50%{opacity:1;transform:scale(1)}}
+  </style>
+</helmet>
+<div style="border:1px solid var(--accent-border);border-radius:var(--radius-lg);background:color-mix(in srgb,var(--accent) 7%,var(--surface-1));overflow:hidden;font-family:var(--font-sans);width:fit-content;max-width:100%">
+  <div style="display:flex;align-items:center;gap:9px;padding:11px 13px 9px">
+    <span style="position:relative;width:18px;height:18px;display:flex;align-items:center;justify-content:center">
+      <span style="position:absolute;width:18px;height:18px;border-radius:50%;background:var(--accent);opacity:.25;animation:kk-act-pulse 1.3s ease-in-out infinite"></span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" style="color:var(--text-accent);position:relative"><path d="M13 2 4 14h7l-1 8 9-12h-7z" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"></path></svg>
+    </span>
+    <div style="display:flex;flex-direction:column;gap:1px">
+      <span style="font-size:var(--fs-body-sm);font-weight:var(--fw-medium);color:var(--text-primary)">Kontor is working</span>
+      <span style="font-size:var(--fs-caption);color:var(--text-secondary)">{{ action }}</span>
+    </div>
+  </div>
+  <div style="height:3px;background:var(--surface-2);position:relative;overflow:hidden">
+    <div style="position:absolute;top:0;left:0;height:100%;width:36%;background:var(--accent);animation:kk-act-prog 1.4s cubic-bezier(.4,0,.2,1) infinite"></div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:6px;padding:10px 13px 12px">
+    <sc-for list="{{ steps }}" as="s" hint-placeholder-count="3">
+      <div style="display:flex;align-items:center;gap:8px;font-size:var(--fs-caption);color:{{ s.color }}">
+        <span style="{{ s.markStyle }}">{{ s.mark }}</span>
+        <span>{{ s.label }}</span>
+      </div>
+    </sc-for>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:300,&quot;height&quot;:150},&quot;action&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Checking availability&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;steps&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{label:string;state:'done'|'active'|'pending'}[]&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const action = this.props.action ?? 'Checking availability';
+    const raw = this.props.steps ?? [
+      { label: 'Understood your request', state: 'done' },
+      { label: 'Checking availability', state: 'active' },
+      { label: 'Prepare options to show you', state: 'pending' },
+    ];
+    const steps = raw.map((s) => {
+      if (s.state === 'done') return { ...s, mark: '\u2713', color: 'var(--text-secondary)', markStyle: { color: 'var(--status-success-fg)', width: 12, display: 'inline-flex', justifyContent: 'center' } };
+      if (s.state === 'active') return { ...s, mark: '\u25CF', color: 'var(--text-primary)', markStyle: { color: 'var(--accent)', width: 12, display: 'inline-flex', justifyContent: 'center', animation: 'kk-act-pulse 1.3s ease-in-out infinite' } };
+      return { ...s, mark: '\u00B7', color: 'var(--text-tertiary)', markStyle: { color: 'var(--text-tertiary)', width: 12, display: 'inline-flex', justifyContent: 'center' } };
+    });
+    return { action, steps };
+  }
+}
+</script>
+</body>
+</html>

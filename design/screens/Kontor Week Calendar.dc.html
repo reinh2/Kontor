@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/styles.css">
+  <script src="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/_ds_bundle.js"></script>
+  <style>
+    html,body{height:100%;margin:0;background:var(--bg-base)}*{box-sizing:border-box}
+    a{color:var(--accent)}a:hover{color:var(--accent-hover)}
+    .kk-sc::-webkit-scrollbar{width:10px;height:10px}
+    .kk-sc::-webkit-scrollbar-thumb{background:var(--border-default);border-radius:6px;border:2px solid var(--bg-base)}
+    @keyframes kk-shim{0%{background-position:-320px 0}100%{background-position:320px 0}}
+    .kk-skel{background:linear-gradient(90deg,var(--surface-2) 25%,var(--surface-3) 37%,var(--surface-2) 63%);background-size:640px 100%;animation:kk-shim 1.4s ease-in-out infinite}
+    @media (max-width:1000px){ .cal-viewtoggle{display:none !important} }
+    @media (max-width:820px){ .cal-topbar{overflow-x:auto;gap:10px} .cal-toolbar{flex-wrap:wrap} }
+    @media (max-width:760px){ .kk-aside{display:none !important} }
+  </style>
+</helmet>
+<div style="display:flex;height:100vh;width:100%;overflow:hidden;font-family:var(--font-sans);color:var(--text-primary);background:var(--bg-base)">
+
+  <aside class="kk-aside" style="width:236px;flex-shrink:0;border-right:1px solid var(--border-subtle);background:var(--surface-1);display:flex;flex-direction:column">
+    <div style="display:flex;align-items:center;gap:10px;padding:18px 18px 16px">
+      <div style="width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:var(--fw-semibold);font-size:var(--fs-body-sm);letter-spacing:-.02em">K</div>
+      <div style="font-size:var(--fs-body-sm);font-weight:var(--fw-semibold);letter-spacing:-.01em">Kontor</div>
+    </div>
+    <nav style="display:flex;flex-direction:column;gap:2px;padding:6px 10px;flex:1">
+      <sc-for list="{{ nav }}" as="item" hint-placeholder-count="6">
+        <div style="{{ item.style }}"><span style="{{ item.dotStyle }}"></span><span>{{ item.label }}</span></div>
+      </sc-for>
+    </nav>
+    <div style="padding:12px 14px;border-top:1px solid var(--border-subtle);display:flex;align-items:center;gap:10px">
+      <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Avatar" name="Sofia Meyer" size="sm" hint-size="24px,24px"></x-import>
+      <div style="line-height:1.2"><div style="font-size:var(--fs-caption);font-weight:var(--fw-medium)">Sofia Meyer</div><div style="font-size:var(--fs-micro);color:var(--text-tertiary)">Salon Nord</div></div>
+    </div>
+  </aside>
+
+  <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+
+    <header class="cal-topbar" style="height:56px;flex-shrink:0;border-bottom:1px solid var(--border-subtle);background:var(--surface-1);display:flex;align-items:center;justify-content:space-between;padding:0 22px">
+      <div style="display:flex;align-items:center;gap:9px;font-size:var(--fs-body-sm)">
+        <span style="color:var(--text-tertiary)">Schedule</span><span style="color:var(--text-tertiary)">/</span><span style="color:var(--text-primary);font-weight:var(--fw-medium)">Salon Nord · 3 staff</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:var(--fs-micro);color:var(--text-tertiary);margin-right:2px">Preview state</span>
+          <sc-for list="{{ stateTabs }}" as="t" hint-placeholder-count="5">
+            <button type="button" onClick="{{ t.onClick }}" style="{{ t.style }}">{{ t.label }}</button>
+          </sc-for>
+        </div>
+        <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Avatar" name="Sofia Meyer" size="sm" hint-size="28px,28px"></x-import>
+      </div>
+    </header>
+
+    <div class="cal-toolbar" style="flex-shrink:0;padding:14px 22px;border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:space-between;gap:16px;position:relative">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="cal-viewtoggle" style="display:flex;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:2px">
+          <button type="button" onClick="{{ setWeekView }}" style="{{ weekBtnStyle }}">Week</button>
+          <button type="button" onClick="{{ setDayView }}" style="{{ dayBtnStyle }}">Day</button>
+        </div>
+        <button type="button" style="height:32px;padding:0 12px;border-radius:var(--radius-md);border:1px solid var(--border-default);background:var(--surface-1);color:var(--text-secondary);font-size:var(--fs-body-sm);font-family:var(--font-sans);cursor:pointer">Today</button>
+        <div style="font-size:var(--fs-h4);font-weight:var(--fw-semibold);letter-spacing:-.01em">{{ rangeLabel }}</div>
+      </div>
+      <button type="button" onClick="{{ toggleMonth }}" style="height:32px;padding:0 12px;display:flex;align-items:center;gap:7px;border-radius:var(--radius-md);border:1px solid var(--border-default);background:var(--surface-1);color:var(--text-secondary);font-size:var(--fs-body-sm);font-family:var(--font-sans);cursor:pointer">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="3" y="4.5" width="18" height="16" rx="2.5" stroke="currentColor" stroke-width="2"></rect><path d="M3 9h18M8 2.5v4M16 2.5v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>
+        July 2026
+      </button>
+      <sc-if value="{{ monthOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;right:22px;top:58px;z-index:30;box-shadow:var(--shadow-overlay);border-radius:var(--radius-lg)">
+          <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Calendar.MonthPicker" month="{{ monthDate }}" selected="{{ selectedDate }}" today="{{ todayDate }}" onSelect="{{ onMonthSelect }}" hint-size="240px,260px"></x-import>
+        </div>
+      </sc-if>
+    </div>
+
+    <div class="kk-sc" style="flex:1;overflow:auto;padding:18px 22px 40px">
+
+      <sc-if value="{{ showChips }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;gap:6px;margin-bottom:14px;max-width:820px">
+          <sc-for list="{{ chips }}" as="c" hint-placeholder-count="7">
+            <button type="button" onClick="{{ c.onClick }}" style="{{ c.style }}">
+              <div style="{{ c.dowStyle }}">{{ c.dow }}</div>
+              <div style="{{ c.numStyle }}">{{ c.num }}<sc-if value="{{ c.today }}" hint-placeholder-val="{{ false }}"><span style="display:inline-block;width:4px;height:4px;border-radius:50%;background:var(--accent);margin-left:4px;vertical-align:middle"></span></sc-if></div>
+            </button>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isDay }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+          <button type="button" style="width:30px;height:30px;border-radius:var(--radius-md);border:1px solid var(--border-default);background:var(--surface-2);color:var(--text-secondary);cursor:pointer">‹</button>
+          <div style="font-size:var(--fs-h4);font-weight:var(--fw-semibold);letter-spacing:-.01em">Thursday, 16 July</div>
+          <button type="button" style="width:30px;height:30px;border-radius:var(--radius-md);border:1px solid var(--border-default);background:var(--surface-2);color:var(--text-secondary);cursor:pointer">›</button>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ showStaffFilter }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+          <span style="font-size:var(--fs-micro);letter-spacing:var(--ls-caps);text-transform:uppercase;color:var(--text-tertiary);flex-shrink:0">Staff</span>
+          <div style="display:flex;gap:6px;overflow-x:auto">
+            <sc-for list="{{ staffTabs }}" as="t" hint-placeholder-count="3">
+              <button type="button" onClick="{{ t.onClick }}" style="{{ t.style }}">{{ t.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- GRID -->
+      <div style="display:flex;border:1px solid var(--border-default);border-radius:var(--radius-lg);overflow:hidden;background:var(--surface-1);max-width:980px;position:relative">
+        <div style="width:56px;flex-shrink:0;border-right:1px solid var(--border-subtle)">
+          <div style="height:46px;border-bottom:1px solid var(--border-subtle)"></div>
+          <div style="position:relative;height:{{ gridHeight }}px">
+            <sc-for list="{{ hours }}" as="h" hint-placeholder-count="14">
+              <div style="{{ h.style }}">{{ h.label }}</div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="flex:1;display:flex">
+          <sc-for list="{{ columns }}" as="col" hint-placeholder-count="3">
+            <div style="flex:1 0 200px;min-width:200px;border-right:1px solid var(--border-subtle)">
+              <div style="height:46px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--border-subtle);background:var(--surface-2)">
+                <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Avatar" name="{{ col.name }}" size="sm" status="{{ col.status }}" hint-size="24px,24px"></x-import>
+                <span style="font-size:var(--fs-body-sm);font-weight:var(--fw-medium);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ col.name }}</span>
+                <sc-if value="{{ col.hasConflict }}" hint-placeholder-val="{{ false }}">
+                  <span style="margin-left:auto;display:inline-flex;align-items:center;gap:4px;padding:1px 7px;background:var(--status-warning-bg);border:1px solid var(--status-warning-border);border-radius:var(--radius-full);font-size:var(--fs-micro);color:var(--status-warning-fg);font-weight:var(--fw-medium)">Double-booked</span>
+                </sc-if>
+              </div>
+              <div style="position:relative;height:{{ gridHeight }}px;background-image:{{ gridLines }}">
+                <div style="{{ col.preTint }}"></div>
+                <div style="{{ col.postTint }}"></div>
+
+                <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}"><span></span></sc-if>
+
+                <sc-if value="{{ isLoading }}" hint-placeholder-val="{{ false }}">
+                  <sc-for list="{{ col.skeletons }}" as="sk" hint-placeholder-count="4">
+                    <div class="kk-skel" style="{{ sk }}"></div>
+                  </sc-for>
+                </sc-if>
+
+                <sc-if value="{{ showContent }}" hint-placeholder-val="{{ true }}">
+                  <sc-for list="{{ col.slots }}" as="slot" hint-placeholder-count="6">
+                    <div onMouseEnter="{{ slot.onEnter }}" onMouseLeave="{{ onSlotLeave }}" onClick="{{ slot.onClick }}" style="{{ slot.style }}">
+                      <sc-if value="{{ slot.showPlus }}" hint-placeholder-val="{{ false }}"><span style="color:var(--text-accent);font-size:var(--fs-body);font-weight:var(--fw-semibold)">+</span></sc-if>
+                    </div>
+                  </sc-for>
+                  <sc-for list="{{ col.blocks }}" as="b" hint-placeholder-count="4">
+                    <sc-if value="{{ b.isAppt }}" hint-placeholder-val="{{ true }}">
+                      <button type="button" onClick="{{ b.onClick }}" style="{{ b.style }}">
+                        <div style="display:flex;align-items:center;gap:5px">
+                          <span style="{{ b.titleStyle }}">{{ b.title }}</span>
+                          <sc-if value="{{ b.conflict }}" hint-placeholder-val="{{ false }}"><span style="color:var(--status-warning-fg);flex-shrink:0">⚠</span></sc-if>
+                        </div>
+                        <sc-if value="{{ b.showService }}" hint-placeholder-val="{{ true }}"><div style="font-size:var(--fs-micro);color:var(--text-secondary);line-height:1.2">{{ b.service }}</div></sc-if>
+                        <div style="{{ b.timeStyle }}">{{ b.time }}</div>
+                      </button>
+                    </sc-if>
+                    <sc-if value="{{ b.isBreak }}" hint-placeholder-val="{{ false }}">
+                      <div style="{{ b.style }}"><span style="font-size:var(--fs-caption);color:var(--text-tertiary);font-weight:var(--fw-medium)">{{ b.title }}</span></div>
+                    </sc-if>
+                    <sc-if value="{{ b.isBuffer }}" hint-placeholder-val="{{ false }}"><div style="{{ b.style }}"></div></sc-if>
+                    <sc-if value="{{ b.isOff }}" hint-placeholder-val="{{ false }}">
+                      <div style="{{ b.style }}"><span style="font-size:var(--fs-body-sm);color:var(--text-tertiary);font-weight:var(--fw-medium)">{{ b.title }}</span></div>
+                    </sc-if>
+                  </sc-for>
+                  <sc-if value="{{ col.ghost }}" hint-placeholder-val="{{ false }}">
+                    <div style="{{ col.ghostStyle }}">
+                      <div style="font-size:var(--fs-caption);font-weight:var(--fw-medium);color:{{ col.ghostFg }}">{{ col.ghostTitle }}</div>
+                      <div style="font-family:var(--font-mono);font-size:var(--fs-micro);color:{{ col.ghostFg }}">{{ col.ghostTime }}</div>
+                    </div>
+                    <sc-if value="{{ col.ghostReason }}" hint-placeholder-val="{{ false }}">
+                      <div style="{{ col.reasonStyle }}">{{ col.ghostReason }}</div>
+                    </sc-if>
+                  </sc-if>
+                </sc-if>
+
+                <sc-if value="{{ col.showNow }}" hint-placeholder-val="{{ false }}">
+                  <div style="position:absolute;left:0;right:0;top:{{ nowTop }}px;height:0;z-index:6;pointer-events:none">
+                    <div style="position:absolute;left:-5px;top:-4px;width:8px;height:8px;border-radius:50%;background:var(--accent)"></div>
+                    <div style="border-top:1.5px solid var(--accent)"></div>
+                  </div>
+                </sc-if>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:46px 0 0 0;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--bg-base) 55%,transparent)">
+            <div style="text-align:center;max-width:320px;padding:28px;background:var(--surface-1);border:1px solid var(--border-default);border-radius:var(--radius-lg);box-shadow:var(--shadow-overlay)">
+              <div style="width:44px;height:44px;margin:0 auto 12px;border-radius:12px;background:var(--accent-subtle);border:1px solid var(--accent-border);display:flex;align-items:center;justify-content:center;color:var(--text-accent)">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="3" y="4.5" width="18" height="16" rx="2.5" stroke="currentColor" stroke-width="2"></rect><path d="M3 9h18M8 2.5v4M16 2.5v4M12 13v4M10 15h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>
+              </div>
+              <div style="font-size:var(--fs-body);font-weight:var(--fw-semibold);letter-spacing:-.01em;margin-bottom:5px">Your week is clear</div>
+              <div style="font-size:var(--fs-body-sm);color:var(--text-secondary);line-height:var(--lh-normal);margin-bottom:16px">No bookings yet. Share your booking link and Kontor will fill the calendar, or add the first appointment yourself.</div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Button" variant="primary" size="md" full-width="{{ true }}" hint-size="100%,34px">Add appointment</x-import>
+                <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Button" variant="secondary" size="md" full-width="{{ true }}" hint-size="100%,34px">Copy booking link</x-import>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:16px;margin-top:14px;flex-wrap:wrap">
+        <sc-for list="{{ legend }}" as="lg" hint-placeholder-count="4">
+          <div style="display:flex;align-items:center;gap:6px;font-size:var(--fs-caption);color:var(--text-secondary)">
+            <span style="{{ lg.dot }}"></span>{{ lg.label }}
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+
+  <!-- DETAIL DRAWER -->
+  <sc-if value="{{ drawerOpen }}" hint-placeholder-val="{{ false }}">
+    <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Drawer" open="{{ true }}" onClose="{{ closeDrawer }}" title="Booking detail" size="md" hint-size="400px,100%">
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+          <div>
+            <div style="font-size:var(--fs-h4);font-weight:var(--fw-semibold);letter-spacing:-.01em">{{ detail.service }}</div>
+            <div style="font-size:var(--fs-body-sm);color:var(--text-tertiary);margin-top:2px">{{ detail.customer }}</div>
+          </div>
+          <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Badge" tone="{{ detail.tone }}" dot="{{ true }}" hint-size="auto,22px">{{ detail.statusLabel }}</x-import>
+        </div>
+        <div style="border:1px solid var(--border-default);border-radius:var(--radius-lg);background:var(--surface-1);padding:6px 14px">
+          <sc-for list="{{ detail.facts }}" as="f" hint-placeholder-count="6">
+            <x-import component-from-global-scope="KontorKanonDesignSystem_452420.KeyValue" label="{{ f.label }}" value="{{ f.value }}" mono="{{ f.mono }}" hint-size="100%,34px"></x-import>
+          </sc-for>
+        </div>
+        <a href="Kontor Agent Trace.dc.html" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border:1px solid var(--accent-border);background:var(--accent-subtle);border-radius:var(--radius-lg);text-decoration:none">
+          <div style="display:flex;align-items:center;gap:9px">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="color:var(--text-accent)"><path d="M13 2 4 14h7l-1 8 9-12h-7z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path></svg>
+            <div><div style="font-size:var(--fs-body-sm);font-weight:var(--fw-medium);color:var(--text-primary)">Booked by Kontor</div><div style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-accent)">run_7f3a9c21</div></div>
+          </div>
+          <span style="color:var(--text-accent);font-size:var(--fs-body)">→</span>
+        </a>
+        <div style="display:flex;gap:8px">
+          <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Button" variant="secondary" size="md" full-width="{{ true }}" hint-size="100%,34px">Reschedule</x-import>
+          <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Button" variant="ghost" size="md" full-width="{{ true }}" hint-size="100%,34px">Cancel</x-import>
+        </div>
+      </div>
+    </x-import>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.DAY_START = 420; this.DAY_END = 1200; this.PX = 1.15;
+    this.WORK_START = 480; this.WORK_END = 1080;
+    this.NOW = 14 * 60 + 37;
+    this.tone = {
+      confirmed: { bg: 'var(--status-success-bg)', border: 'var(--status-success-border)', fg: 'var(--status-success-fg)', badge: 'success', label: 'Confirmed' },
+      rescheduled: { bg: 'var(--status-warning-bg)', border: 'var(--status-warning-border)', fg: 'var(--status-warning-fg)', badge: 'warning', label: 'Rescheduled' },
+      cancelled: { bg: 'var(--status-neutral-bg)', border: 'var(--status-neutral-border)', fg: 'var(--status-neutral-fg)', badge: 'neutral', label: 'Cancelled' },
+      'no-show': { bg: 'var(--status-error-bg)', border: 'var(--status-error-border)', fg: 'var(--status-error-fg)', badge: 'error', label: 'No-show' },
+    };
+    this.state = { view: 'week', demo: 'live', hoveredSlot: null, monthOpen: false, selected: null, vw: (typeof window !== 'undefined' ? window.innerWidth : 1440), staffFilter: 'mira' };
+  }
+  componentDidMount() { this._onResize = () => { const w = window.innerWidth; if (w !== this.state.vw) this.setState({ vw: w }); }; window.addEventListener('resize', this._onResize); this._onResize(); }
+  componentWillUnmount() { if (this._onResize) window.removeEventListener('resize', this._onResize); }
+  toMin(s) { const [h, m] = s.split(':').map(Number); return h * 60 + m; }
+  fmtRange(a, b) { return a + '\u2013' + b; }
+  fmtHour(min) { const h = Math.floor(min / 60); const ap = h < 12 ? 'AM' : 'PM'; const h12 = h % 12 === 0 ? 12 : h % 12; return h12 + ap; }
+  top(min) { return (min - this.DAY_START) * this.PX; }
+  h(min) { return min * this.PX; }
+
+  data() {
+    const svc = { hair: { name: 'Haircut', dur: '45 min', price: '\u20ac38' }, beard: { name: 'Beard trim', dur: '30 min', price: '\u20ac18' }, colour: { name: 'Colour', dur: '90 min', price: '\u20ac75' }, kids: { name: 'Kids cut', dur: '30 min', price: '\u20ac24' } };
+    const mk = (id, staffId, svcKey, cust, start, end, status, buffer) => ({ id, staffId, svc: svcKey, service: svc[svcKey].name, dur: svc[svcKey].dur, price: svc[svcKey].price, title: cust, start, end, status, buffer });
+    const appts = [
+      mk('m1', 'mira', 'hair', 'Marta Ll.', '09:00', '09:45', 'confirmed', 10),
+      mk('m2', 'mira', 'hair', 'J. Aas', '10:15', '11:00', 'confirmed', 10),
+      mk('m3', 'mira', 'colour', 'P. Rensen', '11:30', '13:00', 'confirmed'),
+      mk('m4', 'mira', 'hair', 'S. Berg', '14:00', '14:45', 'rescheduled', 10),
+      mk('m5', 'mira', 'beard', 'T. Holm', '15:00', '15:30', 'no-show'),
+      mk('m6', 'mira', 'hair', 'L. Von', '16:00', '16:45', 'cancelled'),
+      mk('t1', 'theo', 'beard', 'K. Dahl', '08:30', '09:00', 'confirmed'),
+      mk('t2', 'theo', 'hair', 'R. Ek', '09:00', '09:45', 'confirmed'),
+      mk('t3', 'theo', 'hair', 'N. Falk', '09:15', '10:00', 'confirmed'),
+      mk('t4', 'theo', 'colour', 'A. Sund', '10:30', '12:00', 'confirmed'),
+      mk('t5', 'theo', 'hair', 'B. Ohl', '12:00', '12:45', 'confirmed'),
+      mk('t6', 'theo', 'colour', 'C. Ims', '14:00', '15:30', 'confirmed'),
+      mk('t7', 'theo', 'hair', 'D. Roos', '15:30', '16:15', 'rescheduled'),
+      mk('t8', 'theo', 'hair', 'E. Blom', '16:15', '17:00', 'confirmed'),
+    ];
+    return { staff: [
+      { id: 'mira', name: 'Mira Voss' }, { id: 'theo', name: 'Theo Lindqvist' }, { id: 'alex', name: 'Alex Rivera' },
+    ], appts, lunch: { start: '13:00', end: '14:00' } };
+  }
+
+  layout(list) {
+    const s = [...list].sort((a, b) => this.toMin(a.start) - this.toMin(b.start));
+    const groups = [];
+    for (const a of s) {
+      const g = groups.find((gr) => gr.some((b) => this.toMin(a.start) < this.toMin(b.end) && this.toMin(b.start) < this.toMin(a.end)));
+      if (g) g.push(a); else groups.push([a]);
+    }
+    const out = [];
+    for (const g of groups) g.forEach((a, i) => out.push({ ...a, col: i, cols: g.length }));
+    return out;
+  }
+
+  detailFor(a) {
+    const t = this.tone[a.status];
+    return {
+      service: a.service, customer: a.title, tone: t.badge, statusLabel: t.label,
+      facts: [
+        { label: 'Customer', value: a.title, mono: false },
+        { label: 'Service', value: a.service, mono: false },
+        { label: 'Staff', value: this.data().staff.find((s) => s.id === a.staffId).name, mono: false },
+        { label: 'Date', value: 'Thu 16 Jul 2026', mono: false },
+        { label: 'Time', value: a.start + '\u2013' + a.end, mono: true },
+        { label: 'Duration', value: a.dur, mono: true },
+        { label: 'Price', value: a.price, mono: true },
+        { label: 'Reference', value: 'bk_' + a.id + '1e', mono: true },
+      ],
+    };
+  }
+
+  renderVals() {
+    const { view, demo, hoveredSlot, monthOpen, selected } = this.state;
+    const D = this.data();
+    const isNarrow = (this.state.vw || 1440) < 1000;
+    const staffFilter = this.state.staffFilter || D.staff[0].id;
+    const staffList = isNarrow ? D.staff.filter((s) => s.id === staffFilter) : D.staff;
+    const gridHeight = (this.DAY_END - this.DAY_START) * this.PX;
+    const isLoading = demo === 'loading', isEmpty = demo === 'empty';
+    const isDrag = demo === 'dragValid' || demo === 'dragInvalid';
+    const showContent = !isLoading && !isEmpty;
+
+    const hours = [];
+    for (let m = this.DAY_START; m <= this.DAY_END; m += 60) hours.push({ label: this.fmtHour(m), style: { position: 'absolute', top: this.top(m) - 6, right: 8, fontSize: 'var(--fs-micro)', fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' } });
+
+    const preTintH = (this.WORK_START - this.DAY_START) * this.PX;
+    const postTintH = (this.DAY_END - this.WORK_END) * this.PX;
+    const hatch = 'repeating-linear-gradient(135deg, var(--surface-2) 0 6px, var(--surface-1) 6px 12px)';
+
+    const lunchS = this.toMin(D.lunch.start), lunchE = this.toMin(D.lunch.end);
+
+    const columns = staffList.map((s) => {
+      const off = !isEmpty && s.id === 'alex';
+      const raw = (isEmpty || off) ? [] : D.appts.filter((a) => a.staffId === s.id);
+      const placed = this.layout(raw);
+      const hasConflict = placed.some((a) => a.cols > 1);
+      const blocks = [];
+      // lunch
+      if (!isEmpty && !off) blocks.push({ isBreak: true, title: 'Lunch \u00b7 13:00\u201314:00', style: { position: 'absolute', left: 3, right: 3, top: this.top(lunchS), height: (lunchE - lunchS) * this.PX - 2, background: hatch, border: '1px dashed var(--border-default)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center' } });
+      // appts + buffers
+      placed.forEach((a) => {
+        const t = this.tone[a.status];
+        const w = 100 / a.cols, l = w * a.col;
+        const dimmed = a.status === 'cancelled';
+        const durMin = this.toMin(a.end) - this.toMin(a.start);
+        const blockH = Math.max(20, durMin * this.PX - 2);
+        blocks.push({
+          isAppt: true, id: a.id, onClick: () => this.setState({ selected: a }),
+          title: a.title, service: a.service, time: a.start + '\u2013' + a.end, conflict: a.cols > 1,
+          showService: blockH >= 46 && a.cols === 1,
+          style: { position: 'absolute', top: this.top(this.toMin(a.start)), height: Math.max(20, (this.toMin(a.end) - this.toMin(a.start)) * this.PX - 2), left: 'calc(' + l + '% + 2px)', width: 'calc(' + w + '% - 4px)', background: t.bg, border: '1px solid ' + t.border, borderLeft: '2px solid ' + t.fg, boxShadow: a.cols > 1 ? '0 0 0 1.5px var(--status-warning-fg)' : 'none', borderRadius: 'var(--radius-sm)', padding: '2px 6px', textAlign: 'left', cursor: 'pointer', overflow: 'hidden', opacity: dimmed ? 0.6 : 1, zIndex: 3 },
+          titleStyle: { fontSize: 'var(--fs-caption)', fontWeight: 'var(--fw-medium)', color: 'var(--text-primary)', textDecoration: dimmed ? 'line-through' : 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2 },
+          timeStyle: { fontSize: 'var(--fs-micro)', fontFamily: 'var(--font-mono)', color: t.fg, lineHeight: 1.2 },
+        });
+        if (a.buffer && a.cols === 1) {
+          blocks.push({ isBuffer: true, style: { position: 'absolute', left: 3, right: 3, top: this.top(this.toMin(a.end)), height: a.buffer * this.PX, background: 'repeating-linear-gradient(135deg, color-mix(in srgb,var(--accent) 22%,transparent) 0 3px, transparent 3px 7px)', borderRadius: 2, zIndex: 2 } });
+        }
+      });
+      if (off) blocks.push({ isOff: true, title: 'Alex Rivera \u2014 annual leave', style: { position: 'absolute', left: 3, right: 3, top: preTintH, height: (this.WORK_END - this.WORK_START) * this.PX, background: hatch, border: '1px dashed var(--border-default)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4 } });
+      // slots (free 30-min working ranges)
+      const slots = [];
+      if (showContent && !isDrag && !off) {
+        for (let m = this.WORK_START; m < this.WORK_END; m += 30) {
+          if (m >= lunchS && m < lunchE) continue;
+          const covered = placed.some((a) => this.toMin(a.start) < m + 30 && m < this.toMin(a.end));
+          if (covered) continue;
+          const key = s.id + ':' + m;
+          const hov = hoveredSlot === key;
+          slots.push({
+            style: { position: 'absolute', left: 0, right: 0, top: this.top(m), height: 30 * this.PX, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', background: hov ? 'var(--accent-subtle)' : 'transparent', transition: 'var(--transition-colors)', zIndex: 1 },
+            onEnter: () => this.setState({ hoveredSlot: key }),
+            onClick: () => {},
+            showPlus: hov,
+          });
+        }
+      }
+      // skeletons
+      const skeletons = isLoading ? [
+        { top: 90, h: 52 }, { top: 168, h: 40 }, { top: 250, h: 96 }, { top: 470, h: 52 }, { top: 560, h: 40 },
+      ].map((k) => ({ position: 'absolute', left: 4, right: 4, top: k.top, height: k.h, borderRadius: 'var(--radius-sm)' })).map((o) => o) : [];
+
+      // drag ghost on Mira column
+      let ghost = false, ghostStyle, ghostTitle, ghostTime, ghostFg, ghostReason, reasonStyle;
+      if (isDrag && s.id === 'mira') {
+        ghost = true;
+        const valid = demo === 'dragValid';
+        const gs = valid ? this.toMin('15:30') : this.toMin('12:40');
+        const dur = 45;
+        ghostTitle = 'S. Berg \u00b7 Haircut'; ghostTime = valid ? '15:30\u201316:15' : '12:40\u201313:25';
+        ghostFg = valid ? 'var(--text-accent)' : 'var(--status-error-fg)';
+        ghostStyle = { position: 'absolute', left: 4, right: 4, top: this.top(gs), height: dur * this.PX - 2, background: valid ? 'var(--accent-subtle)' : 'var(--status-error-bg)', border: '1.5px dashed ' + (valid ? 'var(--accent)' : 'var(--status-error-fg)'), borderRadius: 'var(--radius-sm)', padding: '4px 7px', zIndex: 8, boxShadow: 'var(--shadow-overlay)' };
+        if (!valid) { ghostReason = 'Overlaps the 13:00 lunch break'; reasonStyle = { position: 'absolute', left: 4, top: this.top(gs) + dur * this.PX + 4, background: 'var(--status-error-fg)', color: '#fff', fontSize: 'var(--fs-micro)', fontWeight: 'var(--fw-medium)', padding: '3px 8px', borderRadius: 'var(--radius-full)', zIndex: 9, whiteSpace: 'nowrap' }; }
+      }
+
+      return {
+        id: s.id, name: s.name, status: s.id === 'mira' ? 'online' : undefined, hasConflict: hasConflict && showContent,
+        preTint: { position: 'absolute', top: 0, left: 0, right: 0, height: preTintH, background: hatch, zIndex: 0 },
+        postTint: { position: 'absolute', bottom: 0, left: 0, right: 0, height: postTintH, background: hatch, zIndex: 0 },
+        blocks: showContent ? blocks : [], slots, skeletons,
+        showNow: showContent && !isEmpty && !off,
+        ghost, ghostStyle, ghostTitle, ghostTime, ghostFg, ghostReason, reasonStyle,
+      };
+    });
+
+    // Alex off column override (annual leave) — show on the busy Thursday? Keep Alex working Thu; represent OFF via a dedicated block on his column when demo==='live' is false? Show off block always as a real signal on a lighter day is out of view.
+    // Represent "off entirely" here by turning Alex's afternoon into leave is wrong; instead add an OFF banner example on demo 'live' — skip to keep data honest.
+
+    const nav = [
+      { key: 'overview', label: 'Overview' }, { key: 'runs', label: 'Runs' }, { key: 'calendar', label: 'Calendar', active: true },
+      { key: 'inbox', label: 'Inbox' }, { key: 'analytics', label: 'Analytics' }, { key: 'settings', label: 'Settings' },
+    ].map((n) => ({ ...n, style: { display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 'var(--radius-md)', fontSize: 'var(--fs-body-sm)', cursor: 'pointer', color: n.active ? 'var(--text-primary)' : 'var(--text-secondary)', background: n.active ? 'var(--surface-hover)' : 'transparent', fontWeight: n.active ? 'var(--fw-medium)' : 'var(--fw-regular)' }, dotStyle: { width: 6, height: 6, borderRadius: '50%', background: n.active ? 'var(--accent)' : 'var(--border-strong)' } }));
+
+    const stateDefs = [ ['live', 'Live'], ['dragValid', 'Drag'], ['dragInvalid', 'Invalid drop'], ['loading', 'Loading'], ['empty', 'Empty'] ];
+    const stateTabs = stateDefs.map(([k, label]) => ({ label, onClick: () => this.setState({ demo: k, selected: null }), style: { height: 26, padding: '0 9px', borderRadius: 'var(--radius-sm)', border: '1px solid ' + (demo === k ? 'var(--accent)' : 'var(--border-default)'), background: demo === k ? 'var(--accent-subtle)' : 'var(--surface-1)', color: demo === k ? 'var(--text-accent)' : 'var(--text-secondary)', fontSize: 'var(--fs-micro)', fontFamily: 'var(--font-sans)', cursor: 'pointer', fontWeight: 'var(--fw-medium)' } }));
+
+    const chipDefs = [ ['Mon', 13], ['Tue', 14], ['Wed', 15], ['Thu', 16], ['Fri', 17], ['Sat', 18], ['Sun', 19] ];
+    const chips = chipDefs.map(([dow, num]) => {
+      const active = num === 16; const today = num === 16;
+      return { dow, num: String(num), today, onClick: () => {},
+        style: { flex: 1, padding: '8px 4px', borderRadius: 'var(--radius-md)', border: '1px solid ' + (active ? 'var(--accent)' : 'var(--border-default)'), background: active ? 'var(--accent-subtle)' : 'var(--surface-1)', cursor: 'pointer', textAlign: 'center' },
+        dowStyle: { fontSize: 'var(--fs-micro)', letterSpacing: 'var(--ls-caps)', textTransform: 'uppercase', color: active ? 'var(--text-accent)' : 'var(--text-tertiary)' },
+        numStyle: { fontSize: 'var(--fs-body)', fontWeight: 'var(--fw-semibold)', color: active ? 'var(--text-primary)' : 'var(--text-secondary)', marginTop: 2 } };
+    });
+
+    const legend = [ ['confirmed', 'Confirmed'], ['rescheduled', 'Rescheduled'], ['cancelled', 'Cancelled'], ['no-show', 'No-show'] ].map(([k, label]) => ({ label, dot: { width: 10, height: 10, borderRadius: 3, background: this.tone[k].bg, border: '1px solid ' + this.tone[k].border, borderLeft: '2px solid ' + this.tone[k].fg } }));
+
+    const segBtn = (on) => ({ height: 26, padding: '0 12px', borderRadius: 'var(--radius-sm)', border: 'none', background: on ? 'var(--surface-1)' : 'transparent', color: on ? 'var(--text-primary)' : 'var(--text-secondary)', fontSize: 'var(--fs-body-sm)', fontFamily: 'var(--font-sans)', fontWeight: 'var(--fw-medium)', cursor: 'pointer', boxShadow: on ? '0 1px 2px rgba(0,0,0,.25)' : 'none' });
+
+    const staffTabs = D.staff.map((s) => ({ label: s.name, onClick: () => this.setState({ staffFilter: s.id }), style: { height: 30, padding: '0 12px', borderRadius: 'var(--radius-md)', border: '1px solid ' + (staffFilter === s.id ? 'var(--accent)' : 'var(--border-default)'), background: staffFilter === s.id ? 'var(--accent-subtle)' : 'var(--surface-1)', color: staffFilter === s.id ? 'var(--text-accent)' : 'var(--text-secondary)', fontSize: 'var(--fs-body-sm)', fontFamily: 'var(--font-sans)', fontWeight: 'var(--fw-medium)', cursor: 'pointer', whiteSpace: 'nowrap' } }));
+
+    return {
+      nav, stateTabs, chips, legend, hours, columns,
+      gridHeight, nowTop: this.top(this.NOW),
+      gridLines: 'repeating-linear-gradient(to bottom, transparent, transparent ' + (60 * this.PX - 1) + 'px, var(--border-subtle) ' + (60 * this.PX) + 'px)',
+      isLoading, isEmpty, showContent, isDay: view === 'day' && !isNarrow, showChips: isNarrow || view === 'week',
+      isNarrow, showStaffFilter: isNarrow, staffTabs,
+      rangeLabel: (view === 'day' || isNarrow) ? 'Thu 16 Jul' : '13\u201319 Jul 2026',
+      weekBtnStyle: segBtn(view === 'week'), dayBtnStyle: segBtn(view === 'day'),
+      setWeekView: () => this.setState({ view: 'week' }), setDayView: () => this.setState({ view: 'day' }),
+      monthOpen, toggleMonth: () => this.setState({ monthOpen: !monthOpen }),
+      monthDate: new Date(2026, 6, 1), selectedDate: new Date(2026, 6, 16), todayDate: new Date(2026, 6, 16),
+      onMonthSelect: () => this.setState({ monthOpen: false }),
+      onSlotLeave: () => this.setState({ hoveredSlot: null }),
+      drawerOpen: !!selected, closeDrawer: () => this.setState({ selected: null }),
+      detail: selected ? this.detailFor(selected) : { facts: [] },
+    };
+  }
+}
+</script>
+</body>
+</html>

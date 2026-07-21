@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/styles.css">
+  <script src="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/_ds_bundle.js"></script>
+  <style>
+    html,body{margin:0}*{box-sizing:border-box}
+    @media (max-width:430px){ .bk-actions{flex-direction:column !important} .bk-actions button{min-height:44px} }
+  </style>
+</helmet>
+<div style="border:1px solid var(--border-default);border-radius:var(--radius-lg);background:var(--surface-1);overflow:hidden;font-family:var(--font-sans)">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;border-bottom:1px solid var(--border-subtle)">
+    <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Badge" tone="{{ tone }}" dot="{{ true }}" hint-size="auto,22px">{{ status }}</x-import>
+    <span style="font-family:var(--font-mono);font-size:var(--fs-caption);color:var(--text-tertiary)">{{ reference }}</span>
+  </div>
+  <div style="padding:14px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:13px">
+      <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Avatar" name="{{ staff }}" size="md" hint-size="32px,32px"></x-import>
+      <div style="line-height:1.25">
+        <div style="font-size:var(--fs-body);font-weight:var(--fw-semibold);letter-spacing:-.01em">{{ service }} with {{ staff }}</div>
+        <div style="font-size:var(--fs-caption);color:var(--text-tertiary)">{{ location }}</div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:9px;padding:11px 12px;background:var(--surface-inset);border:1px solid var(--border-subtle);border-radius:var(--radius-md);margin-bottom:13px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <span style="font-size:var(--fs-caption);color:var(--text-tertiary)">When</span>
+        <span style="font-family:var(--font-mono);font-size:var(--fs-body-sm);color:var(--text-primary)">{{ date }} · {{ time }}</span>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <span style="font-size:var(--fs-caption);color:var(--text-tertiary)">Duration</span>
+        <span style="font-family:var(--font-mono);font-size:var(--fs-body-sm);color:var(--text-primary)">{{ duration }}</span>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <span style="font-size:var(--fs-caption);color:var(--text-tertiary)">Price</span>
+        <span style="font-family:var(--font-mono);font-size:var(--fs-body-sm);color:var(--text-primary)">{{ price }}</span>
+      </div>
+    </div>
+    <div class="bk-actions" style="display:flex;gap:8px">
+      <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Button" variant="secondary" size="md" full-width="{{ true }}" hint-size="100%,34px">Reschedule</x-import>
+      <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Button" variant="ghost" size="md" full-width="{{ true }}" hint-size="100%,34px">Cancel</x-import>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:360,&quot;height&quot;:320},&quot;status&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Confirmed&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;tone&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;success&quot;,&quot;warning&quot;,&quot;error&quot;,&quot;info&quot;,&quot;neutral&quot;],&quot;default&quot;:&quot;success&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;reference&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;bk_5c1e&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;service&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Haircut&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;staff&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Alex Rivera&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;date&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Thu 16 Jul&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;time&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;18:30&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;duration&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;45 min&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;price&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;€38&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      status: this.props.status ?? 'Confirmed',
+      tone: this.props.tone ?? 'success',
+      reference: this.props.reference ?? 'bk_5c1e',
+      service: this.props.service ?? 'Haircut',
+      staff: this.props.staff ?? 'Alex Rivera',
+      location: this.props.location ?? 'Salon Nord · Kastanienallee 12',
+      date: this.props.date ?? 'Thu 16 Jul',
+      time: this.props.time ?? '18:30',
+      duration: this.props.duration ?? '45 min',
+      price: this.props.price ?? '\u20ac38',
+    };
+  }
+}
+</script>
+</body>
+</html>

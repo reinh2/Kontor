@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/tokens/fonts.css">
+  <link rel="stylesheet" href="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/tokens/colors.css">
+  <link rel="stylesheet" href="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/tokens/typography.css">
+  <link rel="stylesheet" href="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/tokens/spacing.css">
+  <link rel="stylesheet" href="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/tokens/radius.css">
+  <link rel="stylesheet" href="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/tokens/motion.css">
+  <link rel="stylesheet" href="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/tokens/base.css">
+  <link rel="stylesheet" href="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/styles.css">
+  <script src="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/_ds_bundle.js"></script>
+  <style>
+    html,body{height:100%;margin:0;background:var(--bg-base)}
+    a{color:var(--accent)}a:hover{color:var(--accent-hover)}
+    *{box-sizing:border-box}
+    .kk-scroll::-webkit-scrollbar{width:10px;height:10px}
+    .kk-scroll::-webkit-scrollbar-thumb{background:var(--border-default);border-radius:6px;border:2px solid var(--bg-base)}
+    @keyframes kk-run-spin{to{transform:rotate(360deg)}}
+    @keyframes kk-type{0%,60%,100%{opacity:.25}30%{opacity:1}}
+    @media (max-width:820px){ .kk-topbar{overflow-x:auto;gap:10px} .kk-agentline{display:none} }
+    @media (max-width:760px){ .kk-aside{display:none !important} }
+  </style>
+</helmet>
+<div style="display:flex;height:100vh;width:100%;overflow:hidden;font-family:var(--font-sans);color:var(--text-primary);background:var(--bg-base)">
+
+  <!-- SIDEBAR -->
+  <aside class="kk-aside" style="width:236px;flex-shrink:0;border-right:1px solid var(--border-subtle);background:var(--surface-1);display:flex;flex-direction:column">
+    <div style="display:flex;align-items:center;gap:10px;padding:18px 18px 16px">
+      <div style="width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:var(--fw-semibold);font-size:var(--fs-body-sm);letter-spacing:-.02em">K</div>
+      <div style="font-size:var(--fs-body-sm);font-weight:var(--fw-semibold);letter-spacing:-.01em">Kontor</div>
+    </div>
+    <nav style="display:flex;flex-direction:column;gap:2px;padding:6px 10px;flex:1">
+      <sc-for list="{{ nav }}" as="item" hint-placeholder-count="6">
+        <div onClick="{{ item.onClick }}" style="{{ item.style }}">
+          <span style="{{ item.dotStyle }}"></span>
+          <span>{{ item.label }}</span>
+        </div>
+      </sc-for>
+    </nav>
+    <div style="padding:12px 14px;border-top:1px solid var(--border-subtle);display:flex;align-items:center;gap:10px">
+      <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Avatar" name="Sofia Meyer" size="sm" hint-size="24px,24px"></x-import>
+      <div style="line-height:1.2">
+        <div style="font-size:var(--fs-caption);font-weight:var(--fw-medium)">Sofia Meyer</div>
+        <div style="font-size:var(--fs-micro);color:var(--text-tertiary)">Operator</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN COLUMN -->
+  <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+
+    <!-- TOPBAR -->
+    <header class="kk-topbar" style="height:56px;flex-shrink:0;border-bottom:1px solid var(--border-subtle);background:var(--surface-1);display:flex;align-items:center;justify-content:space-between;padding:0 22px">
+      <div style="display:flex;align-items:center;gap:9px;font-size:var(--fs-body-sm)">
+        <span onClick="{{ onGoRuns }}" style="{{ crumbRootStyle }}">Runs</span>
+        <sc-if value="{{ crumbHasId }}" hint-placeholder-val="{{ true }}">
+          <span style="display:flex;align-items:center;gap:9px">
+            <span style="color:var(--text-tertiary)">/</span>
+            <span style="font-family:var(--font-mono);color:var(--text-primary)">{{ crumbId }}</span>
+          </span>
+        </sc-if>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <div style="display:flex;align-items:center;padding:2px;gap:2px;border:1px solid var(--border-subtle);border-radius:var(--radius-md);background:var(--bg-base)">
+          <sc-for list="{{ previewTabs }}" as="tab" hint-placeholder-count="5">
+            <button type="button" onClick="{{ tab.onClick }}" style="{{ tab.style }}">{{ tab.label }}</button>
+          </sc-for>
+        </div>
+        <div class="kk-agentline" style="display:flex;align-items:center;gap:7px;font-size:var(--fs-caption);color:var(--text-secondary)">
+          <span style="width:7px;height:7px;border-radius:50%;background:var(--status-success-fg);box-shadow:0 0 0 3px color-mix(in srgb,var(--status-success-fg) 22%,transparent)"></span>
+          Agent online
+        </div>
+        <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Avatar" name="Sofia Meyer" size="sm" hint-size="28px,28px"></x-import>
+      </div>
+    </header>
+
+    <!-- ============ TRACE (success | failed) ============ -->
+    <sc-if value="{{ isTrace }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+
+        <!-- RUN SUMMARY HEADER -->
+        <div style="flex-shrink:0;border-bottom:1px solid var(--border-subtle);background:var(--bg-base);padding:16px 22px;display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:14px;min-width:0">
+            <div style="font-family:var(--font-mono);font-size:var(--fs-h4);font-weight:var(--fw-medium);letter-spacing:-.01em">{{ runId }}</div>
+            <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Badge" tone="{{ outcome.tone }}" dot="{{ true }}" hint-size="auto,22px">{{ outcome.label }}</x-import>
+          </div>
+          <div style="display:flex;align-items:stretch;gap:26px">
+            <sc-for list="{{ metrics }}" as="m" hint-placeholder-count="4">
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <div style="font-size:var(--fs-micro);letter-spacing:var(--ls-caps);text-transform:uppercase;color:var(--text-tertiary)">{{ m.label }}</div>
+                <div style="font-family:var(--font-mono);font-size:var(--fs-body-sm);color:var(--text-primary)">{{ m.value }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <!-- TWO-PANE BODY -->
+        <sc-if value="{{ isNarrow }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ paneTabsBarStyle }}">
+            <sc-for list="{{ paneTabs }}" as="tab" hint-placeholder-count="2">
+              <button type="button" onClick="{{ tab.onClick }}" style="{{ tab.style }}">{{ tab.label }}</button>
+            </sc-for>
+          </div>
+        </sc-if>
+        <div style="{{ paneWrapStyle }}">
+
+          <!-- LEFT: CONVERSATION -->
+          <section style="{{ convSectionStyle }}">
+            <div style="flex-shrink:0;padding:13px 20px;border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:space-between">
+              <div style="font-size:var(--fs-body-sm);font-weight:var(--fw-semibold);letter-spacing:-.01em">Conversation</div>
+              <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Badge" tone="info" hint-size="auto,22px">Telegram</x-import>
+            </div>
+            <div ref="{{ convRef }}" class="kk-scroll" style="flex:1;overflow-y:auto;padding:22px 20px;position:relative;display:flex;flex-direction:column;gap:18px">
+              <div style="text-align:center;font-size:var(--fs-micro);color:var(--text-tertiary);font-family:var(--font-mono)">Thu 16 Jul 2026</div>
+              <sc-for list="{{ messages }}" as="msg" hint-placeholder-count="4">
+                <div ref="{{ msg.ref }}" onMouseEnter="{{ msg.onEnter }}" onMouseLeave="{{ onLeave }}" style="{{ msg.wrapStyle }}">
+                  <div style="{{ msg.metaStyle }}">
+                    <span style="font-weight:var(--fw-medium);color:var(--text-secondary)">{{ msg.name }}</span>
+                    <span style="font-family:var(--font-mono);color:var(--text-tertiary)">{{ msg.time }}</span>
+                  </div>
+                  <div style="{{ msg.bubbleStyle }}">
+                    <sc-if value="{{ msg.isTyping }}" hint-placeholder-val="{{ false }}">
+                      <span style="display:inline-flex;gap:4px;align-items:center">
+                        <span style="width:6px;height:6px;border-radius:50%;background:var(--text-tertiary);animation:kk-type 1.2s infinite"></span>
+                        <span style="width:6px;height:6px;border-radius:50%;background:var(--text-tertiary);animation:kk-type 1.2s .2s infinite"></span>
+                        <span style="width:6px;height:6px;border-radius:50%;background:var(--text-tertiary);animation:kk-type 1.2s .4s infinite"></span>
+                      </span>
+                    </sc-if>
+                    <sc-if value="{{ msg.hasText }}" hint-placeholder-val="{{ true }}">{{ msg.text }}</sc-if>
+                  </div>
+                  <sc-if value="{{ msg.hasTrigger }}" hint-placeholder-val="{{ false }}">
+                    <div style="{{ msg.triggerStyle }}">triggered {{ msg.triggerLabel }}</div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+
+          <!-- RIGHT: TIMELINE -->
+          <section style="{{ timelineSectionStyle }}">
+            <div style="flex-shrink:0;padding:13px 22px;border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:space-between">
+              <div style="font-size:var(--fs-body-sm);font-weight:var(--fw-semibold);letter-spacing:-.01em">Run timeline</div>
+              <div style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-tertiary)">claude-agent-1</div>
+            </div>
+            <div class="kk-scroll" style="flex:1;overflow-y:auto;padding:20px 22px">
+
+              <!-- KEY / VALUE -->
+              <div style="border:1px solid var(--border-default);border-radius:var(--radius-lg);background:var(--surface-1);padding:6px 14px;margin-bottom:22px">
+                <sc-for list="{{ facts }}" as="f" hint-placeholder-count="5">
+                  <x-import component-from-global-scope="KontorKanonDesignSystem_452420.KeyValue" label="{{ f.label }}" value="{{ f.value }}" mono="{{ f.mono }}" hint-size="100%,34px"></x-import>
+                </sc-for>
+              </div>
+
+              <!-- STEPS -->
+              <div style="position:relative;padding-left:26px">
+                <div style="position:absolute;left:6px;top:6px;bottom:10px;width:1px;background:var(--border-default)"></div>
+                <sc-for list="{{ steps }}" as="step" hint-placeholder-count="6">
+                  <div style="position:relative;padding-bottom:14px">
+                    <div style="{{ step.dotStyle }}"></div>
+                    <div onClick="{{ step.onSelect }}" onMouseEnter="{{ step.onEnter }}" onMouseLeave="{{ onLeave }}" style="{{ step.rowStyle }}">
+                      <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+                        <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-tertiary)">{{ step.t }}</span>
+                        <span style="font-size:var(--fs-body-sm);font-weight:var(--fw-medium);color:var(--text-primary)">{{ step.title }}</span>
+                        <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:{{ step.durColor }}">{{ step.durLabel }}</span>
+                      </div>
+                      <sc-if value="{{ step.hasDetail }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-size:var(--fs-caption);color:var(--text-secondary);margin-top:4px;line-height:var(--lh-normal)">{{ step.detail }}</div>
+                      </sc-if>
+                      <div style="display:flex;align-items:center;gap:12px;margin-top:6px">
+                        <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-tertiary)">{{ step.meta }}</span>
+                        <sc-if value="{{ step.hasPayload }}" hint-placeholder-val="{{ false }}">
+                          <button type="button" onClick="{{ step.toggle }}" style="background:none;border:none;padding:0;cursor:pointer;font-family:var(--font-sans);font-size:var(--fs-caption);font-weight:var(--fw-medium);color:var(--accent)">{{ step.toggleLabel }}</button>
+                        </sc-if>
+                      </div>
+                      <sc-if value="{{ step.open }}" hint-placeholder-val="{{ false }}">
+                        <div style="display:flex;flex-direction:column;gap:8px;margin-top:9px">
+                          <sc-if value="{{ step.hasArgs }}" hint-placeholder-val="{{ false }}">
+                            <x-import component-from-global-scope="KontorKanonDesignSystem_452420.CodeBlock" code="{{ step.args }}" title="arguments" hint-size="100%,70px"></x-import>
+                          </sc-if>
+                          <sc-if value="{{ step.hasResult }}" hint-placeholder-val="{{ false }}">
+                            <x-import component-from-global-scope="KontorKanonDesignSystem_452420.CodeBlock" code="{{ step.result }}" title="result" hint-size="100%,70px"></x-import>
+                          </sc-if>
+                        </div>
+                      </sc-if>
+
+                      <!-- NESTED RETRY ATTEMPTS -->
+                      <sc-if value="{{ step.hasRetries }}" hint-placeholder-val="{{ false }}">
+                        <div style="position:relative;margin-top:12px;padding-left:22px">
+                          <div style="position:absolute;left:5px;top:2px;bottom:6px;width:1px;background:var(--border-subtle)"></div>
+                          <sc-for list="{{ step.retries }}" as="r" hint-placeholder-count="2">
+                            <div style="position:relative;padding-bottom:10px">
+                              <div style="{{ r.dotStyle }}"></div>
+                              <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+                                <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-tertiary)">{{ r.t }}</span>
+                                <span style="font-size:var(--fs-caption);font-weight:var(--fw-medium);color:var(--text-primary)">{{ r.title }}</span>
+                                <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:{{ r.durColor }}">{{ r.durLabel }}</span>
+                              </div>
+                              <sc-if value="{{ r.hasDetail }}" hint-placeholder-val="{{ false }}">
+                                <div style="font-size:var(--fs-caption);color:var(--text-secondary);margin-top:3px;line-height:var(--lh-normal)">{{ r.detail }}</div>
+                              </sc-if>
+                              <sc-if value="{{ r.hasErr }}" hint-placeholder-val="{{ false }}">
+                                <div style="margin-top:7px">
+                                  <x-import component-from-global-scope="KontorKanonDesignSystem_452420.CodeBlock" code="{{ r.err }}" title="error" hint-size="100%,60px"></x-import>
+                                </div>
+                              </sc-if>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ RUNS LIST ============ -->
+    <sc-if value="{{ isRunsList }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+        <div style="flex-shrink:0;padding:16px 22px;border-bottom:1px solid var(--border-subtle);background:var(--bg-base)">
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+            <div>
+              <div style="font-size:var(--fs-h3);font-weight:var(--fw-semibold);letter-spacing:var(--ls-tight)">Runs</div>
+              <div style="font-family:var(--font-mono);font-size:var(--fs-caption);color:var(--text-tertiary);margin-top:3px">{{ runsCount }} runs · Jul 14–16, 2026</div>
+            </div>
+            <button type="button" style="display:flex;align-items:center;gap:9px;padding:7px 12px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-1);color:var(--text-secondary);font-family:var(--font-mono);font-size:var(--fs-caption);cursor:pointer">
+              <span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>
+              Jul 14 – 16, 2026
+            </button>
+          </div>
+          <div style="display:flex;align-items:center;gap:24px;margin-top:16px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:var(--fs-micro);letter-spacing:var(--ls-caps);text-transform:uppercase;color:var(--text-tertiary)">Outcome</span>
+              <div style="display:flex;align-items:center;padding:2px;gap:2px;border:1px solid var(--border-subtle);border-radius:var(--radius-md);background:var(--surface-1)">
+                <sc-for list="{{ outcomeFilters }}" as="f" hint-placeholder-count="4">
+                  <button type="button" onClick="{{ f.onClick }}" style="{{ f.style }}">{{ f.label }}</button>
+                </sc-for>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:var(--fs-micro);letter-spacing:var(--ls-caps);text-transform:uppercase;color:var(--text-tertiary)">Channel</span>
+              <div style="display:flex;align-items:center;padding:2px;gap:2px;border:1px solid var(--border-subtle);border-radius:var(--radius-md);background:var(--surface-1)">
+                <sc-for list="{{ channelFilters }}" as="f" hint-placeholder-count="4">
+                  <button type="button" onClick="{{ f.onClick }}" style="{{ f.style }}">{{ f.label }}</button>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="kk-scroll" style="flex:1;overflow:auto;padding:18px 22px">
+          <x-import component-from-global-scope="KontorKanonDesignSystem_452420.DataTable" columns="{{ runsColumns }}" rows="{{ runsRows }}" row-key="id" on-row-click="{{ onRunClick }}" empty="{{ runsEmpty }}" hint-size="100%,420px"></x-import>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ LOADING ============ -->
+    <sc-if value="{{ isLoading }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+        <div style="flex-shrink:0;border-bottom:1px solid var(--border-subtle);background:var(--bg-base);padding:16px 22px;display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:14px">
+            <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="150px" height="20px" hint-size="150px,20px"></x-import>
+            <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="78px" height="22px" hint-size="78px,22px"></x-import>
+          </div>
+          <div style="display:flex;gap:26px">
+            <sc-for list="{{ skelMetrics }}" as="s" hint-placeholder-count="4">
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="52px" height="9px" hint-size="52px,9px"></x-import>
+                <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="46px" height="13px" hint-size="46px,13px"></x-import>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="flex:1;display:grid;grid-template-columns:minmax(360px,0.82fr) minmax(440px,1fr);min-height:0">
+          <section style="display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--border-subtle)">
+            <div style="flex-shrink:0;padding:13px 20px;border-bottom:1px solid var(--border-subtle)">
+              <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="110px" height="14px" hint-size="110px,14px"></x-import>
+            </div>
+            <div style="flex:1;padding:22px 20px;display:flex;flex-direction:column;gap:20px">
+              <sc-for list="{{ skelConv }}" as="b" hint-placeholder-count="4">
+                <div style="{{ b.wrap }}">
+                  <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="78px" height="9px" hint-size="78px,9px"></x-import>
+                  <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="{{ b.w }}" height="{{ b.h }}" hint-size="200px,44px"></x-import>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+          <section style="display:flex;flex-direction:column;min-height:0;background:var(--bg-base)">
+            <div style="flex-shrink:0;padding:13px 22px;border-bottom:1px solid var(--border-subtle)">
+              <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="96px" height="14px" hint-size="96px,14px"></x-import>
+            </div>
+            <div style="flex:1;padding:20px 22px">
+              <div style="border:1px solid var(--border-subtle);border-radius:var(--radius-lg);background:var(--surface-1);padding:14px;margin-bottom:22px;display:flex;flex-direction:column;gap:12px">
+                <sc-for list="{{ skelFacts }}" as="s" hint-placeholder-count="5">
+                  <div style="display:flex;justify-content:space-between;gap:20px">
+                    <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="70px" height="11px" hint-size="70px,11px"></x-import>
+                    <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="{{ s.w }}" height="11px" hint-size="120px,11px"></x-import>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="position:relative;padding-left:26px;display:flex;flex-direction:column;gap:20px">
+                <div style="position:absolute;left:6px;top:4px;bottom:8px;width:1px;background:var(--border-subtle)"></div>
+                <sc-for list="{{ skelSteps }}" as="s" hint-placeholder-count="6">
+                  <div style="position:relative">
+                    <div style="position:absolute;left:-26px;top:0"><x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="14px" height="14px" circle="{{ true }}" hint-size="14px,14px"></x-import></div>
+                    <div style="display:flex;flex-direction:column;gap:6px">
+                      <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="{{ s.w }}" height="13px" hint-size="180px,13px"></x-import>
+                      <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Skeleton" width="120px" height="9px" hint-size="120px,9px"></x-import>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ ERROR ============ -->
+    <sc-if value="{{ isError }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:40px;background:var(--bg-base)">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:18px;max-width:440px;text-align:center">
+          <x-import component-from-global-scope="KontorKanonDesignSystem_452420.ErrorState" title="{{ errTitle }}" description="{{ errDesc }}" on-retry="{{ onRetry }}" hint-size="440px,220px"></x-import>
+          <a href="#" onClick="{{ onGoRuns }}" style="font-size:var(--fs-body-sm);color:var(--text-secondary)">← Back to all runs</a>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { variant: 'success', hoveredMsg: null, selectedStep: null, open: {}, filterOutcome: 'all', filterChannel: 'all', vw: (typeof window !== 'undefined' ? window.innerWidth : 1440), mobilePane: 'timeline' };
+    this.convRef = React.createRef();
+    this.msgRefs = {};
+    this._stepMsg = {};
+    this._msgSteps = {};
+  }
+
+  componentDidMount() { this._onResize = () => { const w = window.innerWidth; if (w !== this.state.vw) this.setState({ vw: w }); }; window.addEventListener('resize', this._onResize); this._onResize(); }
+  componentWillUnmount() { if (this._t) clearTimeout(this._t); if (this._onResize) window.removeEventListener('resize', this._onResize); }
+
+  setVariant(v) { this.setState({ variant: v, hoveredMsg: null, selectedStep: null }); }
+
+  retry() {
+    this.setState({ variant: 'loading' });
+    if (this._t) clearTimeout(this._t);
+    this._t = setTimeout(() => this.setState({ variant: 'success' }), 1500);
+  }
+
+  colorFor(state) {
+    return {
+      success: 'var(--status-success-fg)',
+      running: 'var(--accent)',
+      failed: 'var(--status-error-fg)',
+      retried: 'var(--status-warning-fg)',
+      escalated: 'var(--status-warning-fg)',
+      pending: 'var(--text-tertiary)',
+    }[state] || 'var(--text-tertiary)';
+  }
+
+  durColorFor(state) {
+    if (state === 'running') return 'var(--accent)';
+    if (state === 'failed') return 'var(--status-error-fg)';
+    if (state === 'escalated') return 'var(--status-warning-fg)';
+    return 'var(--text-tertiary)';
+  }
+
+  dotStyle(state, opts) {
+    const size = opts && opts.nested ? 12 : 15;
+    const left = opts && opts.nested ? -22 : -26;
+    const c = this.colorFor(state);
+    const spin = state === 'running';
+    return {
+      position: 'absolute', left, top: opts && opts.nested ? 3 : 4, width: size, height: size,
+      borderRadius: '50%', background: 'var(--bg-base)',
+      border: '2px solid ' + c,
+      borderTopColor: spin ? 'transparent' : c,
+      animation: spin ? 'kk-run-spin .8s linear infinite' : 'none',
+      display: 'flex',
+    };
+  }
+
+  selectStep(id) {
+    const narrow = (this.state.vw || window.innerWidth) < 1100;
+    const doScroll = () => {
+      const mid = this._stepMsg[id];
+      const el = this.msgRefs[mid];
+      const c = this.convRef.current;
+      if (el && c) c.scrollTo({ top: Math.max(0, el.offsetTop - 24), behavior: 'smooth' });
+    };
+    if (narrow) this.setState({ selectedStep: id, mobilePane: 'conversation' }, () => setTimeout(doScroll, 40));
+    else this.setState({ selectedStep: id }, doScroll);
+  }
+
+  toggle(id, e) { if (e && e.stopPropagation) e.stopPropagation(); this.setState((s) => ({ open: { ...s.open, [id]: !s.open[id] } })); }
+
+  runData(variant) {
+    if (variant === 'failed') {
+      return {
+        runId: 'run_9b2e14d7',
+        outcome: { label: 'Failed', tone: 'error' },
+        metrics: [
+          { label: 'Duration', value: '7.32s' },
+          { label: 'Tokens', value: '1,514' },
+          { label: 'Steps', value: '6' },
+          { label: 'Model', value: 'claude-agent-1' },
+        ],
+        facts: [
+          { label: 'Customer', value: 'Marta Ll.', mono: false },
+          { label: 'Channel', value: 'Telegram', mono: false },
+          { label: 'Service', value: 'Haircut \u00b7 45 min', mono: false },
+          { label: 'Staff', value: 'Alex Rivera', mono: false },
+          { label: 'Booking', value: 'not created', mono: false },
+          { label: 'Escalation', value: 'esc_2b7d', mono: true },
+        ],
+        msgSteps: { m1: ['s1', 's2', 's3', 's4'], m3: ['s5', 's6'] },
+        messages: [
+          { id: 'm1', who: 'customer', name: 'Marta Ll.', time: '14:32', text: 'Hi! Any chance of a haircut sometime Thursday evening? I\u2019m flexible on the exact time.', triggerLabel: 'list_services, list_staff, find_slots + reply' },
+          { id: 'm2', who: 'agent', name: 'Kontor', time: '14:32', text: 'I\u2019ve got three openings with Alex Rivera on Thursday evening \u2014 17:45, 18:30 or 19:15. Which works best?' },
+          { id: 'm3', who: 'customer', name: 'Marta Ll.', time: '14:33', text: '18:30 works.', triggerLabel: 'create_booking (failed), escalate_to_human' },
+          { id: 'm4', who: 'agent', name: 'Kontor', time: '14:34', text: 'I\u2019m sorry \u2014 I couldn\u2019t lock in the 18:30 slot just now; the calendar declined it twice. I\u2019ve handed this to Sofia, a colleague, who\u2019ll confirm your haircut with Alex and message you shortly.', handover: true },
+        ],
+        steps: [
+          { id: 's1', t: '14:32:05', title: 'list_services', state: 'success', dur: '120ms', meta: 'claude-agent-1 \u00b7 214 tok',
+            args: {}, result: { count: 4, services: [ { id: 'svc_hair45', name: 'Haircut', minutes: 45 }, { id: 'svc_beard', name: 'Beard trim', minutes: 20 }, { id: 'svc_color', name: 'Colour', minutes: 90 }, { id: 'svc_kids', name: 'Kids cut', minutes: 30 } ] } },
+          { id: 's2', t: '14:32:05', title: 'list_staff', state: 'success', dur: '95ms', meta: 'claude-agent-1 \u00b7 188 tok',
+            args: { role: 'stylist', active: true }, result: { count: 3, staff: [ { id: 'stf_alex', name: 'Alex Rivera' }, { id: 'stf_nadia', name: 'Nadia P.' }, { id: 'stf_tom', name: 'Tom B.' } ] } },
+          { id: 's3', t: '14:32:06', title: 'find_slots', state: 'success', dur: '1.4s', meta: 'claude-agent-1 \u00b7 402 tok',
+            args: { service: 'svc_hair45', staff: 'any', window: { from: '2026-07-16T17:00Z', to: '2026-07-16T21:00Z' } },
+            result: { count: 3, slots: [ '2026-07-16T17:45Z', '2026-07-16T18:30Z', '2026-07-16T19:15Z' ], staff: 'stf_alex' } },
+          { id: 's4', t: '14:32:08', title: 'Draft reply \u00b7 propose slots', state: 'success', dur: '356 tok', meta: 'claude-agent-1 \u00b7 356 tok',
+            detail: 'Proposed 17:45, 18:30 and 19:15 with Alex Rivera and asked the customer to choose.' },
+          { id: 's5', t: '14:33:14', title: 'create_booking', state: 'failed', dur: '409 \u00b7 5.3s', meta: 'claude-agent-1 \u00b7 240 tok',
+            detail: 'Failed after 3 attempts. The 18:30 slot was taken between the search and the write, then the calendar provider went unavailable.',
+            args: { service: 'svc_hair45', staff: 'stf_alex', start: '2026-07-16T18:30Z', customer: 'cus_marta', idempotency_key: 'idem_9b2e14d7-bk-01' },
+            retries: [
+              { id: 's5a', t: '14:33:14', title: 'attempt 1', state: 'failed', dur: '409 \u00b7 210ms', detail: 'Slot no longer available (HTTP 409) \u2014 it was booked through another channel between the search and the write.',
+                err: { error: 'slot_conflict', status: 409, provider: 'cal.v2', message: 'Requested slot 2026-07-16T18:30Z is no longer free', conflicting_booking: 'bk_44a1' } },
+              { id: 's5b', t: '14:33:16', title: 'attempt 2', state: 'failed', dur: '503 \u00b7 2.6s', detail: 'Calendar provider unavailable (HTTP 503). Backed off 2s, then retried.',
+                err: { error: 'service_unavailable', status: 503, provider: 'cal.v2', message: 'Upstream calendar service returned 503' } },
+              { id: 's5c', t: '14:33:19', title: 'attempt 3', state: 'failed', dur: '503 \u00b7 2.5s', detail: 'Still unavailable (HTTP 503). Reached the 3-attempt limit \u2014 escalating.',
+                err: { error: 'service_unavailable', status: 503, provider: 'cal.v2', retries_exhausted: true } },
+            ] },
+          { id: 's6', t: '14:33:19', title: 'escalate_to_human', state: 'escalated', dur: '90ms', meta: 'claude-agent-1 \u00b7 132 tok',
+            detail: 'Couldn\u2019t complete the booking automatically. Handed to a human operator with the full run context.',
+            args: { reason: 'booking_failed', attempts: 3, last_error: 503, booking: { service: 'svc_hair45', staff: 'stf_alex', start: '2026-07-16T18:30Z' } },
+            result: { ticket_id: 'esc_2b7d', assigned_to: 'Sofia Meyer', priority: 'high', sla: '15m' } },
+        ],
+      };
+    }
+    return {
+      runId: 'run_7f3a9c21',
+      outcome: { label: 'Running', tone: 'accent' },
+      metrics: [
+        { label: 'Duration', value: '2.94s' },
+        { label: 'Tokens', value: '1,576' },
+        { label: 'Steps', value: '7' },
+        { label: 'Model', value: 'claude-agent-1' },
+      ],
+      facts: [
+        { label: 'Customer', value: 'Marta Ll.', mono: false },
+        { label: 'Channel', value: 'Telegram', mono: false },
+        { label: 'Service', value: 'Haircut \u00b7 45 min', mono: false },
+        { label: 'Staff', value: 'Alex Rivera', mono: false },
+        { label: 'Booking', value: 'bk_5c1e', mono: true },
+      ],
+      msgSteps: { m1: ['s1', 's2', 's3', 's4'], m3: ['s5', 's6', 's7'] },
+      messages: [
+        { id: 'm1', who: 'customer', name: 'Marta Ll.', time: '14:32', text: 'Hi! Any chance of a haircut sometime Thursday evening? I\u2019m flexible on the exact time.', triggerLabel: 'list_services, list_staff, find_slots + reply' },
+        { id: 'm2', who: 'agent', name: 'Kontor', time: '14:32', text: 'I\u2019ve got three openings with Alex Rivera on Thursday evening \u2014 17:45, 18:30 or 19:15. Which works best?' },
+        { id: 'm3', who: 'customer', name: 'Marta Ll.', time: '14:33', text: '18:30 works.', triggerLabel: 'create_booking, upsert_crm_contact + confirm' },
+        { id: 'm4', who: 'agent', name: 'Kontor', time: '14:33', typing: true },
+      ],
+      steps: [
+        { id: 's1', t: '14:32:05', title: 'list_services', state: 'success', dur: '120ms', meta: 'claude-agent-1 \u00b7 214 tok',
+          args: {}, result: { count: 4, services: [ { id: 'svc_hair45', name: 'Haircut', minutes: 45 }, { id: 'svc_beard', name: 'Beard trim', minutes: 20 }, { id: 'svc_color', name: 'Colour', minutes: 90 }, { id: 'svc_kids', name: 'Kids cut', minutes: 30 } ] } },
+        { id: 's2', t: '14:32:05', title: 'list_staff', state: 'success', dur: '95ms', meta: 'claude-agent-1 \u00b7 188 tok',
+          args: { role: 'stylist', active: true }, result: { count: 3, staff: [ { id: 'stf_alex', name: 'Alex Rivera' }, { id: 'stf_nadia', name: 'Nadia P.' }, { id: 'stf_tom', name: 'Tom B.' } ] } },
+        { id: 's3', t: '14:32:06', title: 'find_slots', state: 'success', dur: '2.1s', meta: 'claude-agent-1 \u00b7 402 tok',
+          args: { service: 'svc_hair45', staff: 'any', window: { from: '2026-07-16T17:00Z', to: '2026-07-16T21:00Z' } },
+          result: { count: 3, slots: [ '2026-07-16T17:45Z', '2026-07-16T18:30Z', '2026-07-16T19:15Z' ], staff: 'stf_alex' },
+          retries: [
+            { id: 's3a', t: '14:32:06', title: 'attempt 1', state: 'failed', dur: '504 \u00b7 3.0s', detail: 'Calendar provider timed out (HTTP 504). Backing off, then retrying.',
+              err: { error: 'upstream_timeout', status: 504, provider: 'cal.v2', message: 'No response from calendar provider within 3000ms' } },
+            { id: 's3b', t: '14:32:08', title: 'attempt 2', state: 'success', dur: '1.1s', detail: 'Succeeded on retry \u2014 3 slots returned.' },
+          ] },
+        { id: 's4', t: '14:32:09', title: 'Draft reply \u00b7 propose slots', state: 'success', dur: '356 tok', meta: 'claude-agent-1 \u00b7 356 tok',
+          detail: 'Proposed 17:45, 18:30 and 19:15 with Alex Rivera and asked the customer to choose.' },
+        { id: 's5', t: '14:33:12', title: 'create_booking', state: 'success', dur: '180ms', meta: 'claude-agent-1 \u00b7 240 tok',
+          args: { service: 'svc_hair45', staff: 'stf_alex', start: '2026-07-16T18:30Z', customer: 'cus_marta', idempotency_key: 'idem_7f3a9c21-bk-01' },
+          result: { booking_id: 'bk_5c1e', status: 'confirmed', start: '2026-07-16T18:30Z' } },
+        { id: 's6', t: '14:33:12', title: 'upsert_crm_contact', state: 'success', dur: '140ms', meta: 'claude-agent-1 \u00b7 176 tok',
+          args: { name: 'Marta Ll.', channel: 'telegram', handle: '@marta_ll' }, result: { contact_id: 'cnt_a19f', created: false } },
+        { id: 's7', t: '14:33:13', title: 'Send confirmation', state: 'running', dur: 'running\u2026', meta: 'claude-agent-1', detail: 'Composing the confirmation message to the customer.' },
+      ],
+    };
+  }
+
+  runsRows() {
+    return [
+      { id: 'run_7f3a9c21', customer: 'Marta Ll.', channel: 'Telegram', service: 'Haircut', outcome: 'completed', duration: '2.94s', ts: 'Jul 16 · 14:33' },
+      { id: 'run_9b2e14d7', customer: 'Daniel O.', channel: 'Web', service: 'Colour', outcome: 'failed', duration: '7.32s', ts: 'Jul 16 · 13:12' },
+      { id: 'run_4a1c8f02', customer: 'Priya S.', channel: 'WhatsApp', service: 'Beard trim', outcome: 'completed', duration: '1.88s', ts: 'Jul 16 · 12:40' },
+      { id: 'run_e7d0a934', customer: 'Tom Beck', channel: 'Telegram', service: 'Haircut', outcome: 'escalated', duration: '3.41s', ts: 'Jul 16 · 11:58' },
+      { id: 'run_2f9b6c15', customer: 'Lena K.', channel: 'Web', service: 'Kids cut', outcome: 'completed', duration: '2.05s', ts: 'Jul 15 · 18:22' },
+      { id: 'run_c3e81a7d', customer: 'Marco V.', channel: 'Telegram', service: 'Colour', outcome: 'completed', duration: '3.77s', ts: 'Jul 15 · 17:03' },
+      { id: 'run_5d24f0b9', customer: 'Aisha R.', channel: 'WhatsApp', service: 'Haircut', outcome: 'escalated', duration: '4.12s', ts: 'Jul 15 · 15:47' },
+      { id: 'run_8b70e3c2', customer: 'Jonas W.', channel: 'Web', service: 'Beard trim', outcome: 'failed', duration: '6.08s', ts: 'Jul 15 · 14:19' },
+      { id: 'run_1e9a5d40', customer: 'Sofia M.', channel: 'Telegram', service: 'Haircut', outcome: 'completed', duration: '2.31s', ts: 'Jul 15 · 10:05' },
+      { id: 'run_a6f2c8e1', customer: 'Ruben D.', channel: 'WhatsApp', service: 'Kids cut', outcome: 'completed', duration: '1.74s', ts: 'Jul 14 · 16:33' },
+      { id: 'run_0d4b9f76', customer: 'Elin H.', channel: 'Web', service: 'Colour', outcome: 'escalated', duration: '3.95s', ts: 'Jul 14 · 13:50' },
+      { id: 'run_bf17e2a8', customer: 'Karim A.', channel: 'Telegram', service: 'Haircut', outcome: 'completed', duration: '2.62s', ts: 'Jul 14 · 09:41' },
+    ];
+  }
+
+  outcomeTone(o) { return { completed: 'success', escalated: 'warning', failed: 'error' }[o] || 'neutral'; }
+  cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+  segStyle(active) {
+    return {
+      padding: '4px 10px', border: 'none', borderRadius: '6px', cursor: 'pointer',
+      fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-caption)',
+      fontWeight: active ? 'var(--fw-medium)' : 'var(--fw-regular)',
+      background: active ? 'var(--surface-hover)' : 'transparent',
+      color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
+      transition: 'background var(--dur-fast,150ms) var(--ease-out,ease), color var(--dur-fast,150ms) var(--ease-out,ease)',
+    };
+  }
+
+  renderVals() {
+    const NS = window.KontorKanonDesignSystem_452420 || {};
+    const { variant, hoveredMsg, selectedStep, open, filterOutcome, filterChannel } = this.state;
+    const isTrace = variant === 'success' || variant === 'failed';
+    const isNarrow = (this.state.vw || 1440) < 1100;
+    const mobilePane = this.state.mobilePane || 'timeline';
+    const data = this.runData(variant);
+    this._msgSteps = data.msgSteps;
+    this._stepMsg = {};
+    Object.keys(data.msgSteps).forEach((mid) => data.msgSteps[mid].forEach((sid) => { this._stepMsg[sid] = mid; }));
+
+    const highlightMsg = selectedStep ? this._stepMsg[selectedStep] : null;
+
+    const messages = data.messages.map((m) => {
+      const isCustomer = m.who === 'customer';
+      const active = hoveredMsg === m.id || highlightMsg === m.id;
+      return {
+        ...m,
+        ref: (el) => { this.msgRefs[m.id] = el; },
+        onEnter: () => this.setState({ hoveredMsg: m.id }),
+        hasText: !!m.text,
+        isTyping: !!m.typing,
+        hasTrigger: !!m.triggerLabel,
+        triggerLabel: m.triggerLabel || '',
+        wrapStyle: {
+          display: 'flex', flexDirection: 'column', gap: 5, maxWidth: '86%',
+          alignSelf: isCustomer ? 'flex-start' : 'flex-end',
+          alignItems: isCustomer ? 'flex-start' : 'flex-end',
+          cursor: 'default', borderRadius: 'var(--radius-lg)',
+          padding: '6px 8px', margin: '-6px -8px',
+          background: active ? 'color-mix(in srgb,var(--accent) 9%,transparent)' : 'transparent',
+          transition: 'background var(--dur-fast,160ms) var(--ease-out,ease)',
+        },
+        metaStyle: { display: 'flex', gap: 8, fontSize: 'var(--fs-micro)', padding: '0 2px' },
+        bubbleStyle: {
+          fontSize: 'var(--fs-body-sm)', lineHeight: 'var(--lh-normal)', padding: '9px 13px',
+          borderRadius: '12px', maxWidth: '100%', textWrap: 'pretty',
+          background: isCustomer ? 'var(--surface-2)' : (m.handover ? 'color-mix(in srgb,var(--status-warning-fg) 14%,var(--surface-2))' : 'var(--accent)'),
+          color: isCustomer ? 'var(--text-primary)' : (m.handover ? 'var(--text-primary)' : '#fff'),
+          border: isCustomer ? '1px solid var(--border-subtle)' : (m.handover ? '1px solid color-mix(in srgb,var(--status-warning-fg) 40%,transparent)' : 'none'),
+          borderBottomLeftRadius: isCustomer ? '4px' : '12px',
+          borderBottomRightRadius: isCustomer ? '12px' : '4px',
+        },
+        triggerStyle: {
+          fontSize: 'var(--fs-micro)', fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)',
+          padding: '0 2px', opacity: active ? 1 : 0.55,
+          transition: 'opacity var(--dur-fast,160ms) var(--ease-out,ease)',
+        },
+      };
+    });
+
+    const mapRetry = (r) => ({
+      ...r,
+      dotStyle: this.dotStyle(r.state, { nested: true }),
+      durColor: this.colorFor(r.state),
+      durLabel: r.dur,
+      hasDetail: !!r.detail,
+      hasErr: !!r.err,
+    });
+
+    const steps = data.steps.map((s) => {
+      const triggered = hoveredMsg && (this._msgSteps[hoveredMsg] || []).includes(s.id);
+      const active = selectedStep === s.id || triggered;
+      const hasArgs = s.args !== undefined;
+      const hasResult = s.result !== undefined;
+      return {
+        ...s,
+        dotStyle: this.dotStyle(s.state),
+        durColor: this.durColorFor(s.state),
+        durLabel: s.dur,
+        hasDetail: !!s.detail,
+        hasPayload: hasArgs || hasResult,
+        hasArgs, hasResult,
+        hasRetries: !!(s.retries && s.retries.length),
+        retries: (s.retries || []).map(mapRetry),
+        open: !!open[s.id],
+        toggleLabel: open[s.id] ? 'Hide payload' : 'Show payload',
+        toggle: (e) => this.toggle(s.id, e),
+        onSelect: () => this.selectStep(s.id),
+        onEnter: () => { const mid = this._stepMsg[s.id]; if (mid) this.setState({ hoveredMsg: mid }); },
+        rowStyle: {
+          borderRadius: 'var(--radius-md)', padding: '9px 12px', margin: '0 -12px 0 -6px', cursor: 'pointer',
+          background: active ? 'var(--surface-2)' : 'transparent',
+          boxShadow: selectedStep === s.id ? 'inset 2px 0 0 var(--accent)' : 'none',
+          transition: 'background var(--dur-fast,160ms) var(--ease-out,ease)',
+        },
+      };
+    });
+
+    const nav = [
+      { key: 'overview', label: 'Overview' },
+      { key: 'runs', label: 'Runs', active: true },
+      { key: 'calendar', label: 'Calendar' },
+      { key: 'inbox', label: 'Inbox' },
+      { key: 'analytics', label: 'Analytics' },
+      { key: 'settings', label: 'Settings' },
+    ].map((n) => ({
+      ...n,
+      onClick: n.key === 'runs' ? () => this.setVariant('runs') : null,
+      style: {
+        display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 'var(--radius-md)',
+        fontSize: 'var(--fs-body-sm)', cursor: 'pointer',
+        color: n.active ? 'var(--text-primary)' : 'var(--text-secondary)',
+        background: n.active ? 'var(--surface-hover)' : 'transparent',
+        fontWeight: n.active ? 'var(--fw-medium)' : 'var(--fw-regular)',
+      },
+      dotStyle: { width: 6, height: 6, borderRadius: '50%', background: n.active ? 'var(--accent)' : 'var(--border-strong)' },
+    }));
+
+    const previewTabs = [['success', 'Success'], ['failed', 'Failed'], ['runs', 'Runs list'], ['loading', 'Loading'], ['error', 'Error']].map(([v, label]) => ({
+      label,
+      onClick: () => this.setVariant(v),
+      style: this.segStyle(variant === v),
+    }));
+
+    // runs list
+    const allRows = this.runsRows();
+    const runsRows = allRows.filter((r) => (filterOutcome === 'all' || r.outcome === filterOutcome) && (filterChannel === 'all' || r.channel === filterChannel));
+    const badgeCell = (v) => React.createElement(NS.Badge, { tone: this.outcomeTone(v), dot: true }, this.cap(v));
+    const runsColumns = [
+      { key: 'id', header: 'Run', mono: true, width: '138px', sortable: true },
+      { key: 'customer', header: 'Customer', width: '130px', sortable: true },
+      { key: 'channel', header: 'Channel', width: '108px', sortable: true },
+      { key: 'service', header: 'Service', sortable: true },
+      { key: 'outcome', header: 'Outcome', width: '132px', sortable: true, render: (v) => badgeCell(v) },
+      { key: 'duration', header: 'Duration', mono: true, align: 'right', width: '96px', sortable: true },
+      { key: 'ts', header: 'Time', mono: true, align: 'right', width: '124px', sortable: true },
+    ];
+    const onRunClick = (row) => this.setVariant(row.outcome === 'failed' ? 'failed' : 'success');
+
+    const outcomeFilters = [['all', 'All'], ['completed', 'Completed'], ['escalated', 'Escalated'], ['failed', 'Failed']].map(([v, label]) => ({
+      label, onClick: () => this.setState({ filterOutcome: v }), style: this.segStyle(filterOutcome === v),
+    }));
+    const channelFilters = [['all', 'All'], ['Telegram', 'Telegram'], ['Web', 'Web'], ['WhatsApp', 'WhatsApp']].map(([v, label]) => ({
+      label, onClick: () => this.setState({ filterChannel: v }), style: this.segStyle(filterChannel === v),
+    }));
+
+    // loading skeleton specs
+    const skelMetrics = [0, 1, 2, 3];
+    const skelConv = [
+      { align: 'flex-start', w: '64%', h: '54px' },
+      { align: 'flex-end', w: '50%', h: '44px' },
+      { align: 'flex-start', w: '30%', h: '30px' },
+      { align: 'flex-end', w: '58%', h: '48px' },
+    ].map((b) => ({
+      w: b.w, h: b.h,
+      wrap: { display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '86%', alignSelf: b.align, alignItems: b.align },
+    }));
+    const skelFacts = [{ w: '90px' }, { w: '70px' }, { w: '120px' }, { w: '96px' }, { w: '64px' }];
+    const skelSteps = [{ w: '160px' }, { w: '140px' }, { w: '190px' }, { w: '150px' }, { w: '170px' }, { w: '120px' }];
+
+    const convBase = { display: 'flex', flexDirection: 'column', minHeight: 0, borderRight: '1px solid var(--border-subtle)' };
+    const tlBase = { display: 'flex', flexDirection: 'column', minHeight: 0, background: 'var(--bg-base)' };
+    const paneTabs = [['timeline', 'Timeline'], ['conversation', 'Conversation']].map(([v, label]) => ({
+      label, onClick: () => this.setState({ mobilePane: v }), style: this.segStyle(mobilePane === v),
+    }));
+
+    return {
+      convRef: this.convRef,
+      onLeave: () => this.setState({ hoveredMsg: null }),
+      messages, steps, nav, previewTabs,
+      isNarrow, paneTabs,
+      paneTabsBarStyle: { position: 'sticky', top: 0, zIndex: 5, display: 'flex', gap: 2, padding: '8px 22px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-base)' },
+      paneWrapStyle: isNarrow
+        ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }
+        : { flex: 1, display: 'grid', gridTemplateColumns: 'minmax(360px,0.82fr) minmax(440px,1fr)', minHeight: 0 },
+      convSectionStyle: isNarrow ? { ...convBase, borderRight: 'none', display: mobilePane === 'conversation' ? 'flex' : 'none' } : convBase,
+      timelineSectionStyle: isNarrow ? { ...tlBase, display: mobilePane === 'timeline' ? 'flex' : 'none' } : tlBase,
+      runId: data.runId, outcome: data.outcome, metrics: data.metrics, facts: data.facts,
+      isTrace, isRunsList: variant === 'runs', isLoading: variant === 'loading', isError: variant === 'error',
+      crumbHasId: variant !== 'runs',
+      crumbId: isTrace ? data.runId : 'run_7f3a9c21',
+      crumbRootStyle: { color: variant === 'runs' ? 'var(--text-primary)' : 'var(--text-tertiary)', cursor: 'pointer' },
+      onGoRuns: (e) => { if (e && e.preventDefault) e.preventDefault(); this.setVariant('runs'); },
+      runsColumns, runsRows, runsCount: runsRows.length, onRunClick,
+      runsEmpty: { title: 'No runs match', description: 'Adjust the outcome or channel filter to see more.' },
+      outcomeFilters, channelFilters,
+      skelMetrics, skelConv, skelFacts, skelSteps,
+      errTitle: 'Couldn\u2019t load this run',
+      errDesc: 'The observability service didn\u2019t respond, so the trace for run_7f3a9c21 can\u2019t be shown right now. (504 · trace 7f3a…c21)',
+      onRetry: () => this.retry(),
+    };
+  }
+}
+</script>
+</body>
+</html>

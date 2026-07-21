@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <meta name="design_doc_mode" content="canvas">
+  <link rel="stylesheet" href="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/styles.css">
+  <script src="_ds/kontor-docmind-design-system-4524202b-448a-4e76-aa63-307609316422/_ds_bundle.js"></script>
+  <style>
+    html,body{margin:0;background:var(--bg-base)}*{box-sizing:border-box}
+    a{color:var(--accent)}a:hover{color:var(--accent-hover)}
+    .kk-sc::-webkit-scrollbar{width:9px}
+    .kk-sc::-webkit-scrollbar-thumb{background:var(--border-default);border-radius:6px;border:2px solid var(--surface-1)}
+    @keyframes kk-nudge{0%{opacity:0;transform:translateY(6px)}100%{opacity:1;transform:translateY(0)}}
+    @media (max-width:560px){
+      .chat-canvas{min-width:0 !important;padding:28px 16px 64px !important}
+      .chat-row{flex-direction:column !important;gap:36px !important;align-items:stretch !important}
+      .chat-frame,.mobile-frame,.spot-frame{width:100% !important;max-width:430px !important;height:auto !important;min-height:560px}
+      .launcher-frame{width:100% !important;max-width:430px !important;height:340px !important}
+    }
+  </style>
+</helmet>
+<div class="chat-canvas" style="min-width:1600px;padding:52px 56px 80px;font-family:var(--font-sans);color:var(--text-primary);background:var(--bg-base)">
+
+  <div style="max-width:900px;margin-bottom:44px">
+    <div style="font-size:var(--fs-micro);letter-spacing:var(--ls-caps);text-transform:uppercase;color:var(--text-tertiary);font-weight:var(--fw-medium)">Kontor · customer chat widget</div>
+    <h1 style="font-size:var(--fs-h2);font-weight:var(--fw-semibold);letter-spacing:-.02em;margin:10px 0 8px;line-height:var(--lh-tight)">The widget where the booking actually happens</h1>
+    <p style="font-size:var(--fs-body);color:var(--text-secondary);line-height:var(--lh-relaxed);margin:0">Kontor <em>performs actions</em> — it checks a calendar and books you in. The rich blocks inside the thread (slot picker, confirmation, booking) are the product. That is the difference from DocMind, which only answers questions with citations.</p>
+  </div>
+
+  <div class="chat-row" style="display:flex;flex-wrap:wrap;gap:48px;align-items:flex-start">
+
+    <!-- 1a LAUNCHER -->
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-accent);background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--radius-full);padding:2px 8px">1a</span>
+        <span style="font-size:var(--fs-body-sm);color:var(--text-secondary)">Collapsed launcher on the host site</span>
+      </div>
+      <div class="launcher-frame" style="width:760px;height:520px;border-radius:var(--radius-lg);border:1px solid var(--border-default);overflow:hidden;position:relative;background:var(--bg-base);background-image:radial-gradient(circle at 18% 15%,color-mix(in srgb,var(--accent) 12%,transparent),transparent 42%),radial-gradient(circle at 85% 80%,color-mix(in srgb,var(--viz-2,#56b7c9) 9%,transparent),transparent 40%)">
+        <div style="height:38px;display:flex;align-items:center;gap:7px;padding:0 14px;border-bottom:1px solid var(--border-subtle);background:var(--surface-1)">
+          <span style="width:10px;height:10px;border-radius:50%;background:var(--border-strong)"></span>
+          <span style="width:10px;height:10px;border-radius:50%;background:var(--border-strong)"></span>
+          <span style="width:10px;height:10px;border-radius:50%;background:var(--border-strong)"></span>
+          <span style="margin-left:12px;font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-tertiary)">salonnord.de</span>
+        </div>
+        <div style="padding:46px 48px;max-width:520px">
+          <div style="font-size:var(--fs-micro);letter-spacing:var(--ls-caps);text-transform:uppercase;color:var(--text-tertiary);font-weight:var(--fw-medium)">Salon Nord</div>
+          <div style="font-size:var(--fs-display-md,44px);font-weight:var(--fw-semibold);letter-spacing:-.03em;line-height:1.05;margin:14px 0 14px">Book your next cut in seconds.</div>
+          <div style="font-size:var(--fs-body-lg);color:var(--text-secondary);line-height:var(--lh-relaxed)">Ask the assistant in the corner for a time — it checks the calendar and books you straight in.</div>
+        </div>
+        <div style="position:absolute;right:24px;bottom:24px;display:flex;flex-direction:column;align-items:flex-end;gap:14px">
+          <div style="width:250px;background:var(--surface-1);border:1px solid var(--border-default);border-radius:var(--radius-lg);box-shadow:var(--shadow-overlay);padding:12px 13px;animation:kk-nudge .4s var(--ease-out) both">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <span style="width:20px;height:20px;border-radius:6px;background:var(--accent-subtle);border:1px solid var(--accent-border);display:flex;align-items:center;justify-content:center;color:var(--text-accent)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h7l-1 8 9-12h-7z" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"></path></svg></span>
+              <span style="font-size:var(--fs-caption);font-weight:var(--fw-semibold)">Kontor</span>
+            </div>
+            <div style="font-size:var(--fs-body-sm);color:var(--text-secondary);line-height:var(--lh-normal)">Need a time? I can check availability and book you in.</div>
+          </div>
+          <button type="button" style="width:56px;height:56px;border-radius:50%;background:var(--accent);color:#fff;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:var(--shadow-overlay)">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M4 5.5h16v11H9l-4 4z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path><path d="M8.5 11h7" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 1b FIRST OPEN -->
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-accent);background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--radius-full);padding:2px 8px">1b</span>
+        <span style="font-size:var(--fs-body-sm);color:var(--text-secondary)">First open · suggested prompts</span>
+      </div>
+      <div class="chat-frame" style="width:400px;height:600px;display:flex;flex-direction:column;background:var(--surface-1);border:1px solid var(--border-default);border-radius:var(--radius-xl);overflow:hidden;box-shadow:var(--shadow-overlay)">
+        <div style="{{ headerStyle }}">
+          <div style="{{ botBoxStyle }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4.5" width="18" height="16" rx="2.5" stroke="currentColor" stroke-width="2"></rect><path d="M3 9h18M8 2.5v4M16 2.5v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:7px"><span style="font-size:var(--fs-body-sm);font-weight:var(--fw-semibold);letter-spacing:-.01em">Kontor</span><span style="{{ actsPillStyle }}"><svg width="9" height="9" viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h7l-1 8 9-12h-7z" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"></path></svg>Acts for you</span></div>
+            <div style="display:flex;align-items:center;gap:5px;font-size:var(--fs-micro);color:var(--text-tertiary);margin-top:1px"><span style="width:6px;height:6px;border-radius:50%;background:var(--status-success-fg)"></span>Books into your calendar</div>
+          </div>
+          <span style="{{ closeStyle }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></span>
+        </div>
+        <div class="kk-sc" style="flex:1;overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:14px">
+          <div style="align-self:flex-start;max-width:88%;padding:10px 13px;background:var(--surface-3);border:1px solid var(--border-subtle);border-radius:12px 12px 12px 3px;font-size:var(--fs-body-sm);line-height:var(--lh-normal)">Hi! I'm Kontor, the booking assistant for Salon Nord. I can check availability and book you straight in — no phone call needed. What are you after?</div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+            <div style="font-size:var(--fs-micro);letter-spacing:var(--ls-caps);text-transform:uppercase;color:var(--text-tertiary);font-weight:var(--fw-medium)">Try asking</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              <sc-for list="{{ prompts }}" as="p" hint-placeholder-count="4">
+                <button type="button" style="padding:8px 12px;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--radius-full);color:var(--text-secondary);font-size:var(--fs-caption);font-family:var(--font-sans);cursor:pointer">{{ p }}</button>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+        <div style="{{ footerStyle }}">
+          <div style="{{ inputPillStyle }}"><span style="flex:1;font-size:var(--fs-body-sm);color:var(--text-tertiary)">Message Kontor…</span><span style="{{ sendBtnStyle }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 12 20 4l-6 16-3-6z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path></svg></span></div>
+          <div style="text-align:center;font-size:var(--fs-micro);color:var(--text-tertiary);margin-top:8px">Kontor by Salon Nord · books into your calendar</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 1c SLOT PICKER MOMENT -->
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-accent);background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--radius-full);padding:2px 8px">1c</span>
+        <span style="font-size:var(--fs-body-sm);color:var(--text-secondary)">Mid-conversation · slot picker open</span>
+      </div>
+      <div class="chat-frame" style="width:400px;height:600px;display:flex;flex-direction:column;background:var(--surface-1);border:1px solid var(--border-default);border-radius:var(--radius-xl);overflow:hidden;box-shadow:var(--shadow-overlay)">
+        <div style="{{ headerStyle }}">
+          <div style="{{ botBoxStyle }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4.5" width="18" height="16" rx="2.5" stroke="currentColor" stroke-width="2"></rect><path d="M3 9h18M8 2.5v4M16 2.5v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:7px"><span style="font-size:var(--fs-body-sm);font-weight:var(--fw-semibold);letter-spacing:-.01em">Kontor</span><span style="{{ actsPillStyle }}"><svg width="9" height="9" viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h7l-1 8 9-12h-7z" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"></path></svg>Acts for you</span></div>
+            <div style="display:flex;align-items:center;gap:5px;font-size:var(--fs-micro);color:var(--text-tertiary);margin-top:1px"><span style="width:6px;height:6px;border-radius:50%;background:var(--status-success-fg)"></span>Books into your calendar</div>
+          </div>
+          <span style="{{ closeStyle }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></span>
+        </div>
+        <div class="kk-sc" style="flex:1;overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:14px">
+          <div style="align-self:flex-end;max-width:82%;padding:9px 12px;background:var(--accent);color:var(--text-on-accent);border-radius:12px 12px 3px 12px;font-size:var(--fs-body-sm);line-height:var(--lh-normal)">Hi! Any chance of a haircut sometime Thursday evening? I'm flexible on the exact time.</div>
+          <div style="align-self:flex-start;max-width:88%;padding:10px 13px;background:var(--surface-3);border:1px solid var(--border-subtle);border-radius:12px 12px 12px 3px;font-size:var(--fs-body-sm);line-height:var(--lh-normal)">A haircut is 45 min with Alex Rivera. Here's what's open Thursday evening — tap a time and I'll book it.</div>
+          <dc-import name="Slot Picker" style="width:100%" hint-size="100%,420px"></dc-import>
+        </div>
+        <div style="{{ footerStyle }}">
+          <div style="{{ inputPillStyle }}"><span style="flex:1;font-size:var(--fs-body-sm);color:var(--text-tertiary)">Message Kontor…</span><span style="{{ sendBtnStyle }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 12 20 4l-6 16-3-6z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path></svg></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 1d CONFIRMATION + BOOKING -->
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-accent);background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--radius-full);padding:2px 8px">1d</span>
+        <span style="font-size:var(--fs-body-sm);color:var(--text-secondary)">Right after confirmation · booking card</span>
+      </div>
+      <div class="chat-frame" style="width:400px;height:600px;display:flex;flex-direction:column;background:var(--surface-1);border:1px solid var(--border-default);border-radius:var(--radius-xl);overflow:hidden;box-shadow:var(--shadow-overlay)">
+        <div style="{{ headerStyle }}">
+          <div style="{{ botBoxStyle }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4.5" width="18" height="16" rx="2.5" stroke="currentColor" stroke-width="2"></rect><path d="M3 9h18M8 2.5v4M16 2.5v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:7px"><span style="font-size:var(--fs-body-sm);font-weight:var(--fw-semibold);letter-spacing:-.01em">Kontor</span><span style="{{ actsPillStyle }}"><svg width="9" height="9" viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h7l-1 8 9-12h-7z" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"></path></svg>Acts for you</span></div>
+            <div style="display:flex;align-items:center;gap:5px;font-size:var(--fs-micro);color:var(--text-tertiary);margin-top:1px"><span style="width:6px;height:6px;border-radius:50%;background:var(--status-success-fg)"></span>Books into your calendar</div>
+          </div>
+          <span style="{{ closeStyle }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></span>
+        </div>
+        <div class="kk-sc" style="flex:1;overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:14px">
+          <div style="align-self:flex-end;max-width:82%;padding:9px 12px;background:var(--accent);color:var(--text-on-accent);border-radius:12px 12px 3px 12px;font-size:var(--fs-body-sm);line-height:var(--lh-normal)">18:30 works.</div>
+          <dc-import name="Confirmation Card" confirmed="{{ true }}" style="width:100%" hint-size="100%,300px"></dc-import>
+          <dc-import name="Acting Indicator" action="Creating your booking" steps="{{ actingStepsBooking }}" style="width:100%" hint-size="100%,150px"></dc-import>
+          <dc-import name="Booking Card" style="width:100%" hint-size="100%,300px"></dc-import>
+          <div style="align-self:flex-start;max-width:88%;padding:10px 13px;background:var(--surface-3);border:1px solid var(--border-subtle);border-radius:12px 12px 12px 3px;font-size:var(--fs-body-sm);line-height:var(--lh-normal)">You're booked — I've added it to Alex's calendar and sent a confirmation. See you Thursday at 18:30.</div>
+        </div>
+        <div style="{{ footerStyle }}">
+          <div style="{{ inputPillStyle }}"><span style="flex:1;font-size:var(--fs-body-sm);color:var(--text-tertiary)">Message Kontor…</span><span style="{{ sendBtnStyle }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 12 20 4l-6 16-3-6z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path></svg></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 1e ACTING INDICATOR SPOTLIGHT -->
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-accent);background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--radius-full);padding:2px 8px">1e</span>
+        <span style="font-size:var(--fs-body-sm);color:var(--text-secondary)">Acting indicator · work in progress</span>
+      </div>
+      <div class="spot-frame" style="width:360px;padding:20px;background:var(--surface-1);border:1px solid var(--border-default);border-radius:var(--radius-lg)">
+        <dc-import name="Acting Indicator" action="Checking availability" style="width:100%" hint-size="100%,150px"></dc-import>
+        <div style="font-size:var(--fs-caption);color:var(--text-tertiary);margin-top:14px;line-height:var(--lh-normal)">Names the current tool call — not a generic "typing…". The customer sees that real work is happening.</div>
+      </div>
+    </div>
+
+    <!-- 1f ESCALATION -->
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-accent);background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--radius-full);padding:2px 8px">1f</span>
+        <span style="font-size:var(--fs-body-sm);color:var(--text-secondary)">Escalation · handed to a human</span>
+      </div>
+      <div class="chat-frame" style="width:400px;height:600px;display:flex;flex-direction:column;background:var(--surface-1);border:1px solid var(--border-default);border-radius:var(--radius-xl);overflow:hidden;box-shadow:var(--shadow-overlay)">
+        <div style="{{ headerStyle }}">
+          <div style="{{ botBoxStyle }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4.5" width="18" height="16" rx="2.5" stroke="currentColor" stroke-width="2"></rect><path d="M3 9h18M8 2.5v4M16 2.5v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:7px"><span style="font-size:var(--fs-body-sm);font-weight:var(--fw-semibold);letter-spacing:-.01em">Kontor</span><span style="{{ actsPillStyle }}"><svg width="9" height="9" viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h7l-1 8 9-12h-7z" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"></path></svg>Acts for you</span></div>
+            <div style="display:flex;align-items:center;gap:5px;font-size:var(--fs-micro);color:var(--text-tertiary);margin-top:1px"><span style="width:6px;height:6px;border-radius:50%;background:var(--status-success-fg)"></span>Books into your calendar</div>
+          </div>
+          <span style="{{ closeStyle }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></span>
+        </div>
+        <div class="kk-sc" style="flex:1;overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:14px">
+          <div style="align-self:flex-end;max-width:82%;padding:9px 12px;background:var(--accent);color:var(--text-on-accent);border-radius:12px 12px 3px 12px;font-size:var(--fs-body-sm);line-height:var(--lh-normal)">Actually I need three cuts back-to-back for me and my two kids — can you do that?</div>
+          <div style="align-self:flex-start;max-width:88%;padding:10px 13px;background:var(--surface-3);border:1px solid var(--border-subtle);border-radius:12px 12px 12px 3px;font-size:var(--fs-body-sm);line-height:var(--lh-normal)">That's a bigger booking than I can arrange on my own. Let me bring in someone from the salon.</div>
+          <dc-import name="Escalation Break" style="width:100%" hint-size="100%,220px"></dc-import>
+        </div>
+        <div style="{{ footerStyle }}">
+          <div style="{{ inputPillStyle }}"><span style="flex:1;font-size:var(--fs-body-sm);color:var(--text-tertiary)">Message Sofia…</span><span style="{{ sendBtnStyle }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 12 20 4l-6 16-3-6z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path></svg></span></div>
+          <div style="text-align:center;font-size:var(--fs-micro);color:var(--text-tertiary);margin-top:8px">You're now chatting with a person</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 1g MOBILE -->
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-accent);background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--radius-full);padding:2px 8px">1g</span>
+        <span style="font-size:var(--fs-body-sm);color:var(--text-secondary)">Mobile · full-screen at 390px</span>
+      </div>
+      <div class="mobile-frame" style="width:390px;height:780px;display:flex;flex-direction:column;background:var(--surface-1);border:1px solid var(--border-default);border-radius:26px;overflow:hidden;box-shadow:var(--shadow-overlay)">
+        <div style="height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:var(--surface-1);flex-shrink:0">
+          <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-secondary)">18:32</span>
+          <span style="display:flex;gap:4px;align-items:center"><span style="width:16px;height:8px;border:1px solid var(--text-tertiary);border-radius:2px;display:inline-block"></span></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--border-subtle);flex-shrink:0">
+          <span style="color:var(--text-tertiary);display:flex"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+          <div style="{{ botBoxStyle }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4.5" width="18" height="16" rx="2.5" stroke="currentColor" stroke-width="2"></rect><path d="M3 9h18M8 2.5v4M16 2.5v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:7px"><span style="font-size:var(--fs-body-sm);font-weight:var(--fw-semibold)">Kontor</span><span style="{{ actsPillStyle }}"><svg width="9" height="9" viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h7l-1 8 9-12h-7z" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"></path></svg>Acts for you</span></div>
+            <div style="display:flex;align-items:center;gap:5px;font-size:var(--fs-micro);color:var(--text-tertiary);margin-top:1px"><span style="width:6px;height:6px;border-radius:50%;background:var(--status-success-fg)"></span>Books into your calendar</div>
+          </div>
+        </div>
+        <div class="kk-sc" style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px">
+          <div style="align-self:flex-end;max-width:84%;padding:10px 13px;background:var(--accent);color:var(--text-on-accent);border-radius:14px 14px 4px 14px;font-size:var(--fs-body);line-height:var(--lh-normal)">Haircut Thursday evening?</div>
+          <div style="align-self:flex-start;max-width:90%;padding:11px 14px;background:var(--surface-3);border:1px solid var(--border-subtle);border-radius:14px 14px 14px 4px;font-size:var(--fs-body);line-height:var(--lh-normal)">Here's what's open with Alex — tap a time.</div>
+          <dc-import name="Slot Picker" style="width:100%" hint-size="100%,420px"></dc-import>
+        </div>
+        <div style="padding:12px 16px 18px;border-top:1px solid var(--border-subtle);flex-shrink:0">
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 8px 8px 15px;background:var(--surface-inset);border:1px solid var(--border-default);border-radius:var(--radius-full)"><span style="flex:1;font-size:var(--fs-body);color:var(--text-tertiary)">Message Kontor…</span><span style="width:44px;height:44px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M4 12 20 4l-6 16-3-6z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path></svg></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 1h ERROR -->
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-accent);background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--radius-full);padding:2px 8px">1h</span>
+        <span style="font-size:var(--fs-body-sm);color:var(--text-secondary)">Error · provider unreachable, fallback route</span>
+      </div>
+      <div class="chat-frame" style="width:400px;height:600px;display:flex;flex-direction:column;background:var(--surface-1);border:1px solid var(--border-default);border-radius:var(--radius-xl);overflow:hidden;box-shadow:var(--shadow-overlay)">
+        <div style="{{ headerStyle }}">
+          <div style="{{ botBoxStyle }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4.5" width="18" height="16" rx="2.5" stroke="currentColor" stroke-width="2"></rect><path d="M3 9h18M8 2.5v4M16 2.5v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:7px"><span style="font-size:var(--fs-body-sm);font-weight:var(--fw-semibold);letter-spacing:-.01em">Kontor</span></div>
+            <div style="display:flex;align-items:center;gap:5px;font-size:var(--fs-micro);color:var(--text-tertiary);margin-top:1px"><span style="width:6px;height:6px;border-radius:50%;background:var(--status-error-fg)"></span>Can't reach the assistant</div>
+          </div>
+          <span style="{{ closeStyle }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></span>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:28px 26px;gap:6px">
+          <div style="width:48px;height:48px;border-radius:14px;background:var(--status-error-bg);border:1px solid var(--status-error-border);display:flex;align-items:center;justify-content:center;color:var(--status-error-fg);margin-bottom:8px">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M3 15a4 4 0 0 1 3-6.9A5.5 5.5 0 0 1 17 8.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path><path d="M4 4l16 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>
+          </div>
+          <div style="font-size:var(--fs-body);font-weight:var(--fw-semibold);letter-spacing:-.01em">Can't reach the assistant right now</div>
+          <div style="font-size:var(--fs-body-sm);color:var(--text-secondary);line-height:var(--lh-normal);max-width:290px">The AI provider didn't respond, so I can't book automatically. You can still reach Salon Nord directly:</div>
+          <div style="display:flex;flex-direction:column;gap:9px;width:100%;max-width:280px;margin-top:14px">
+            <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Button" variant="primary" size="lg" full-width="{{ true }}" hint-size="100%,42px">Call the salon · 030 55 55 12</x-import>
+            <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Button" variant="secondary" size="lg" full-width="{{ true }}" hint-size="100%,42px">Email hello@salonnord.de</x-import>
+            <x-import component-from-global-scope="KontorKanonDesignSystem_452420.Button" variant="ghost" size="md" full-width="{{ true }}" hint-size="100%,34px">Try again</x-import>
+          </div>
+          <div style="font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--text-tertiary);margin-top:16px">504 · trace 7f3a…c21</div>
+        </div>
+        <div style="{{ footerStyle }}">
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 5px 5px 13px;background:var(--surface-2);border:1px solid var(--border-subtle);border-radius:var(--radius-full);opacity:.55"><span style="flex:1;font-size:var(--fs-body-sm);color:var(--text-tertiary)">Assistant unavailable</span><span style="{{ sendBtnDisabledStyle }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 12 20 4l-6 16-3-6z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path></svg></span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1600,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      prompts: ['Book a haircut', 'Any evening slots Thursday?', 'What does a colour cost?', 'Opening hours'],
+      actingStepsBooking: [
+        { label: 'Confirmed the details with you', state: 'done' },
+        { label: 'Reserving 18:30 with Alex', state: 'done' },
+        { label: 'Creating your booking', state: 'active' },
+      ],
+      headerStyle: { display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderBottom: '1px solid var(--border-subtle)', flexShrink: 0 },
+      botBoxStyle: { width: 34, height: 34, borderRadius: 10, background: 'var(--accent-subtle)', border: '1px solid var(--accent-border)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-accent)', flexShrink: 0 },
+      actsPillStyle: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', background: 'var(--accent-subtle)', border: '1px solid var(--accent-border)', borderRadius: 'var(--radius-full)', fontSize: 'var(--fs-micro)', color: 'var(--text-accent)', fontWeight: 'var(--fw-medium)' },
+      closeStyle: { color: 'var(--text-tertiary)', display: 'flex', cursor: 'pointer', flexShrink: 0 },
+      footerStyle: { padding: 12, borderTop: '1px solid var(--border-subtle)', flexShrink: 0 },
+      inputPillStyle: { display: 'flex', alignItems: 'center', gap: 8, padding: '5px 5px 5px 13px', background: 'var(--surface-inset)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-full)' },
+      sendBtnStyle: { width: 30, height: 30, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+      sendBtnDisabledStyle: { width: 30, height: 30, borderRadius: '50%', background: 'var(--surface-3)', color: 'var(--text-disabled)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+    };
+  }
+}
+</script>
+</body>
+</html>
