@@ -54,6 +54,7 @@ func (e *Executor) Execute(ctx context.Context, request agent.ToolRequest) (agen
 		})
 		attemptErr := attemptCtx.Err()
 		cancel()
+		execution.SideEffectCommitted = execution.SideEffectCommitted || result.SideEffectCommitted
 
 		payload, marshalErr := json.Marshal(result)
 		if marshalErr != nil {
@@ -101,19 +102,26 @@ func (e *Executor) Execute(ctx context.Context, request agent.ToolRequest) (agen
 func (e *Executor) resolveTrustedContext(ctx context.Context, request agent.ToolRequest) (tools.TrustedContext, error) {
 	var trusted tools.TrustedContext
 	err := e.pool.QueryRow(ctx, `
-		SELECT r.tenant_id::text,c.customer_id::text,r.conversation_id::text,
-		       COALESCE(r.trigger_message_id::text,'')
+		SELECT r.tenant_id::text,c.customer_id::text,customer.display_name,
+		       COALESCE(customer.email,''),COALESCE(customer.phone,''),
+		       r.conversation_id::text,COALESCE(r.trigger_message_id::text,'')
 		FROM agent_runs r
 		JOIN conversations c ON c.tenant_id=r.tenant_id AND c.id=r.conversation_id
+		JOIN customers customer ON customer.tenant_id=c.tenant_id AND customer.id=c.customer_id
 		WHERE r.tenant_id=$1 AND r.id=$2 AND r.conversation_id=$3`,
 		e.tenantID, request.RunID, request.ConversationID).
-		Scan(&trusted.TenantID, &trusted.CustomerID, &trusted.ConversationID, &trusted.InboundMessageID)
+		Scan(
+			&trusted.TenantID, &trusted.CustomerID, &trusted.CustomerDisplayName,
+			&trusted.CustomerEmail, &trusted.CustomerPhone,
+			&trusted.ConversationID, &trusted.InboundMessageID,
+		)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return tools.TrustedContext{}, errors.New("trusted agent run context not found")
 	}
 	if err != nil {
 		return tools.TrustedContext{}, fmt.Errorf("resolve trusted tool context: %w", err)
 	}
+	trusted.AgentRunID = request.RunID
 	trusted.Capabilities = map[tools.Capability]bool{
 		tools.CapabilityScheduleRead:         true,
 		tools.CapabilityBookingCreateSelf:    true,

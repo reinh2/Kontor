@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -81,7 +82,10 @@ func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool, migrationFS fs.FS,
 		if err != nil {
 			return err
 		}
-		body, err := fs.ReadFile(migrationFS, dir+"/"+entry.Name())
+		// embed.FS requires canonical slash-separated paths and rejects a
+		// leading "./". path.Join keeps both embedded and disk-backed fs.FS
+		// implementations valid when callers use "." as the root directory.
+		body, err := fs.ReadFile(migrationFS, path.Join(dir, entry.Name()))
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", entry.Name(), err)
 		}

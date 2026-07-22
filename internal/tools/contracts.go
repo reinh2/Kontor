@@ -23,12 +23,12 @@ var definitions = []Definition{
 	{
 		Name: ToolCreateBooking, Version: ContractVersion,
 		Description: "Propose or, after a server-authorized confirmation, create a booking using a slot token.",
-		Parameters:  schema(schemaPrefix + `"required":["slot_token","customer","idempotency_key"],"properties":{"slot_token":{"type":"string","minLength":32,"maxLength":600,"pattern":"^slt_v1_[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"},"customer":{"type":"object","required":["display_name","contact"],"properties":{"display_name":{"type":"string","minLength":1,"maxLength":200},"contact":{"type":"object","properties":{"email":{"type":"string","format":"email","maxLength":254},"phone":{"type":"string","pattern":"^\\+[1-9][0-9]{7,14}$"}},"anyOf":[{"required":["email"]},{"required":["phone"]}],"additionalProperties":false},"company":{"type":"string","maxLength":200},"locale":{"type":"string","minLength":2,"maxLength":35}},"additionalProperties":false},"notes":{"type":"string","maxLength":500},"idempotency_key":{"type":"string","minLength":16,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},"confirmation_id":{"type":"string","format":"uuid"}},"additionalProperties":false}`),
+		Parameters:  schema(schemaPrefix + `"required":["slot_token","customer","idempotency_key"],"properties":{"slot_token":{"type":"string","minLength":32,"maxLength":1024,"pattern":"^slt_v1_[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"},"customer":{"type":"object","required":["display_name","contact"],"properties":{"display_name":{"type":"string","minLength":1,"maxLength":200},"contact":{"type":"object","properties":{"email":{"type":"string","format":"email","maxLength":254},"phone":{"type":"string","pattern":"^\\+[1-9][0-9]{7,14}$"}},"anyOf":[{"required":["email"]},{"required":["phone"]}],"additionalProperties":false},"company":{"type":"string","maxLength":200},"locale":{"type":"string","minLength":2,"maxLength":35}},"additionalProperties":false},"notes":{"type":"string","maxLength":500},"idempotency_key":{"type":"string","minLength":16,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},"confirmation_id":{"type":"string","format":"uuid"}},"additionalProperties":false}`),
 	},
 	{
 		Name: ToolReschedule, Version: ContractVersion,
 		Description: "Propose or, after confirmation, reschedule an owned booking.",
-		Parameters:  schema(schemaPrefix + `"required":["booking_id","new_slot","idempotency_key"],"properties":{"booking_id":{"type":"string","format":"uuid"},"new_slot":{"type":"object","required":["slot_token"],"properties":{"slot_token":{"type":"string","minLength":32,"maxLength":600,"pattern":"^slt_v1_[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"}},"additionalProperties":false},"idempotency_key":{"type":"string","minLength":16,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},"confirmation_id":{"type":"string","format":"uuid"}},"additionalProperties":false}`),
+		Parameters:  schema(schemaPrefix + `"required":["booking_id","new_slot","idempotency_key"],"properties":{"booking_id":{"type":"string","format":"uuid"},"new_slot":{"type":"object","required":["slot_token"],"properties":{"slot_token":{"type":"string","minLength":32,"maxLength":1024,"pattern":"^slt_v1_[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"}},"additionalProperties":false},"idempotency_key":{"type":"string","minLength":16,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},"confirmation_id":{"type":"string","format":"uuid"}},"additionalProperties":false}`),
 	},
 	{
 		Name: ToolCancel, Version: ContractVersion,
@@ -49,6 +49,11 @@ var definitions = []Definition{
 		Name: ToolEscalate, Version: ContractVersion,
 		Description: "Hand this conversation to a human operator.",
 		Parameters:  schema(schemaPrefix + `"required":["reason"],"properties":{"reason":{"type":"object","required":["code","summary"],"properties":{"code":{"type":"string","enum":["customer_request","understanding_failed","tool_refused","provider_failure","policy","other"]},"summary":{"type":"string","minLength":1,"maxLength":1000}},"additionalProperties":false}},"additionalProperties":false}`),
+	},
+	{
+		Name: ToolRespondToCustomer, Version: ContractVersion,
+		Description: "Mandatory terminal control call for a customer-facing reply. Call it alone, never alongside another tool. Use clarification_needed only when missing information prevents answering or acting; the server escalates after three consecutive clarification outcomes.",
+		Parameters:  schema(schemaPrefix + `"required":["disposition","message"],"properties":{"disposition":{"type":"string","enum":["complete","clarification_needed"]},"message":{"type":"string","minLength":1,"maxLength":2000,"pattern":"\\S"}},"additionalProperties":false}`),
 	},
 }
 

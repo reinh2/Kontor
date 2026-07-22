@@ -158,11 +158,24 @@ func (s *PostgreSQL) Authorize(ctx context.Context, id string, confirmedBy tools
 		return tools.ErrConfirmationInvalid
 	}
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE action_proposals
+		UPDATE action_proposals AS proposal
 		SET status='confirmed',confirmed_message_id=$5,confirmed_at=$6
-		WHERE tenant_id=$1 AND id=$2 AND customer_id=$3 AND conversation_id=$4
-		  AND status='pending' AND expires_at>$6
-		  AND proposed_message_id<>$5`,
+		FROM messages AS confirmed
+		WHERE proposal.tenant_id=$1 AND proposal.id=$2
+		  AND proposal.customer_id=$3 AND proposal.conversation_id=$4
+		  AND proposal.status='pending' AND proposal.expires_at>$6
+		  AND proposal.proposed_message_id<>$5
+		  AND confirmed.tenant_id=proposal.tenant_id
+		  AND confirmed.id=$5 AND confirmed.conversation_id=proposal.conversation_id
+		  AND confirmed.role='user'
+		  AND EXISTS (
+			SELECT 1 FROM messages AS presented
+			WHERE presented.tenant_id=proposal.tenant_id
+			  AND presented.conversation_id=proposal.conversation_id
+			  AND presented.role='assistant'
+			  AND presented.created_at>=proposal.created_at
+			  AND presented.created_at<confirmed.created_at
+		  )`,
 		confirmedBy.TenantID, id, confirmedBy.CustomerID, confirmedBy.ConversationID,
 		confirmedBy.InboundMessageID, now)
 	if err != nil {

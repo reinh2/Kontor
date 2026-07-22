@@ -40,7 +40,7 @@ func (s *Store) FinishRun(ctx context.Context, runID, status, errorCode, errorMe
 	if status == "" {
 		status = "completed"
 	}
-	_, err := s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE agent_runs
 		SET status=$3,error_code=NULLIF($4,''),error_message=NULLIF($5,''),
 		    duration_ms=$6,finished_at=now()
@@ -48,6 +48,9 @@ func (s *Store) FinishRun(ctx context.Context, runID, status, errorCode, errorMe
 		s.tenantID, runID, status, errorCode, errorMessage, nonNegativeMS(time.Since(startedAt)))
 	if err != nil {
 		return fmt.Errorf("finish agent run: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("finish agent run: run %s not found", runID)
 	}
 	return nil
 }
@@ -57,6 +60,8 @@ func (s *Store) RecordModelCall(ctx context.Context, trace agent.ModelCallTrace)
 		"returned_tool_call_count": trace.ReturnedToolCallCount,
 		"reserved_tokens":          trace.ReservedTokens,
 		"charged_tokens":           trace.ChargedTokens,
+		"status":                   trace.Status,
+		"error_message":            trace.ErrorMessage,
 	})
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -65,24 +70,28 @@ func (s *Store) RecordModelCall(ctx context.Context, trace agent.ModelCallTrace)
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO agent_iterations
-			(tenant_id,id,agent_run_id,iteration_no,finish_reason,prompt_tokens,
-			 completion_tokens,duration_ms,model_response,created_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)`,
-		s.tenantID, ids.New(), trace.RunID, trace.Iteration, trace.FinishReason,
+			(tenant_id,id,agent_run_id,iteration_no,status,finish_reason,prompt_tokens,
+			 completion_tokens,duration_ms,model_response,error_message,created_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,NULLIF($11,''),$12)`,
+		s.tenantID, ids.New(), trace.RunID, trace.Iteration, string(trace.Status), trace.FinishReason,
 		trace.Usage.InputTokens, trace.Usage.OutputTokens,
-		nonNegativeMS(trace.FinishedAt.Sub(trace.StartedAt)), string(payload), trace.StartedAt,
+		nonNegativeMS(trace.FinishedAt.Sub(trace.StartedAt)), string(payload), trace.ErrorMessage, trace.StartedAt,
 	); err != nil {
 		return fmt.Errorf("insert model trace: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		UPDATE agent_runs
 		SET model=CASE WHEN $3='' THEN model ELSE $3 END,
 		    prompt_tokens=prompt_tokens+$4,
 		    completion_tokens=completion_tokens+$5
 		WHERE tenant_id=$1 AND id=$2`,
 		s.tenantID, trace.RunID, trace.Model, trace.Usage.InputTokens, trace.Usage.OutputTokens,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("update run usage: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("update run usage: run %s not found", trace.RunID)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit model trace: %w", err)
@@ -91,7 +100,7 @@ func (s *Store) RecordModelCall(ctx context.Context, trace agent.ModelCallTrace)
 }
 
 func (s *Store) RecordToolExecutionStarted(ctx context.Context, trace agent.ToolExecutionStartedTrace) error {
-	_, err := s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO tool_executions
 			(tenant_id,id,agent_run_id,agent_iteration_id,tool_call_id,tool_name,
 			 contract_version,arguments_json,status,call_index,call_count,started_at)
@@ -103,6 +112,9 @@ func (s *Store) RecordToolExecutionStarted(ctx context.Context, trace agent.Tool
 	if err != nil {
 		return fmt.Errorf("insert tool parent trace: %w", err)
 	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("insert tool parent trace: iteration %d for run %s not found", trace.Iteration, trace.RunID)
+	}
 	return nil
 }
 
@@ -111,7 +123,7 @@ func (s *Store) RecordToolAttempt(ctx context.Context, trace agent.ToolAttemptTr
 	if trace.Status != agent.ToolStatusSuccess {
 		status = "failed"
 	}
-	_, err := s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO tool_execution_attempts
 			(tenant_id,id,tool_execution_id,attempt_no,status,result_json,duration_ms,started_at,finished_at)
 		SELECT $1,$2,e.id,$3,$4,$5::jsonb,$6,$7,$8
@@ -123,6 +135,9 @@ func (s *Store) RecordToolAttempt(ctx context.Context, trace agent.ToolAttemptTr
 	if err != nil {
 		return fmt.Errorf("insert tool attempt trace: %w", err)
 	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("insert tool attempt trace: parent call %s for run %s not found", trace.CallID, trace.RunID)
+	}
 	return nil
 }
 
@@ -133,7 +148,7 @@ func (s *Store) RecordToolExecutionCompleted(ctx context.Context, trace agent.To
 	default:
 		status = "failed"
 	}
-	_, err := s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE tool_executions
 		SET result_json=$4::jsonb,status=$5,duration_ms=$6,finished_at=$7
 		WHERE tenant_id=$1 AND agent_run_id=$2 AND tool_call_id=$3`,
@@ -142,21 +157,41 @@ func (s *Store) RecordToolExecutionCompleted(ctx context.Context, trace agent.To
 	if err != nil {
 		return fmt.Errorf("complete tool parent trace: %w", err)
 	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("complete tool parent trace: call %s for run %s not found", trace.CallID, trace.RunID)
+	}
 	return nil
 }
 
 type RunTrace struct {
-	ID               string      `json:"id"`
-	ConversationID   string      `json:"conversation_id"`
-	Status           string      `json:"status"`
-	Provider         string      `json:"provider"`
-	Model            string      `json:"model"`
-	PromptTokens     int         `json:"prompt_tokens"`
-	CompletionTokens int         `json:"completion_tokens"`
-	DurationMS       *int        `json:"duration_ms"`
-	StartedAt        time.Time   `json:"started_at"`
-	FinishedAt       *time.Time  `json:"finished_at"`
-	Tools            []ToolTrace `json:"tools"`
+	ID               string           `json:"id"`
+	ConversationID   string           `json:"conversation_id"`
+	Status           string           `json:"status"`
+	Provider         string           `json:"provider"`
+	Model            string           `json:"model"`
+	PromptTokens     int              `json:"prompt_tokens"`
+	CompletionTokens int              `json:"completion_tokens"`
+	DurationMS       *int             `json:"duration_ms"`
+	ErrorCode        string           `json:"error_code,omitempty"`
+	ErrorMessage     string           `json:"error_message,omitempty"`
+	StartedAt        time.Time        `json:"started_at"`
+	FinishedAt       *time.Time       `json:"finished_at"`
+	Iterations       []IterationTrace `json:"iterations"`
+	Tools            []ToolTrace      `json:"tools"`
+}
+
+type IterationTrace struct {
+	Iteration             int       `json:"iteration"`
+	Status                string    `json:"status"`
+	FinishReason          string    `json:"finish_reason,omitempty"`
+	PromptTokens          int       `json:"prompt_tokens"`
+	CompletionTokens      int       `json:"completion_tokens"`
+	DurationMS            int       `json:"duration_ms"`
+	ReturnedToolCallCount int       `json:"returned_tool_call_count"`
+	ReservedTokens        int       `json:"reserved_tokens"`
+	ChargedTokens         int       `json:"charged_tokens"`
+	ErrorMessage          string    `json:"error_message,omitempty"`
+	StartedAt             time.Time `json:"started_at"`
 }
 
 type ToolTrace struct {
@@ -184,15 +219,50 @@ func (s *Store) GetRun(ctx context.Context, runID string) (RunTrace, error) {
 	var run RunTrace
 	err := s.pool.QueryRow(ctx, `
 		SELECT id::text,conversation_id::text,status,provider,model,prompt_tokens,
-		       completion_tokens,duration_ms,started_at,finished_at
+		       completion_tokens,duration_ms,COALESCE(error_code,''),COALESCE(error_message,''),
+		       started_at,finished_at
 		FROM agent_runs WHERE tenant_id=$1 AND id=$2`, s.tenantID, runID).
 		Scan(&run.ID, &run.ConversationID, &run.Status, &run.Provider, &run.Model,
-			&run.PromptTokens, &run.CompletionTokens, &run.DurationMS, &run.StartedAt, &run.FinishedAt)
+			&run.PromptTokens, &run.CompletionTokens, &run.DurationMS, &run.ErrorCode,
+			&run.ErrorMessage, &run.StartedAt, &run.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RunTrace{}, pgx.ErrNoRows
 	}
 	if err != nil {
 		return RunTrace{}, fmt.Errorf("get run: %w", err)
+	}
+	iterationRows, err := s.pool.Query(ctx, `
+		SELECT iteration_no,status,COALESCE(finish_reason,''),prompt_tokens,completion_tokens,
+		       duration_ms,COALESCE((model_response->>'returned_tool_call_count')::integer,0),
+		       COALESCE((model_response->>'reserved_tokens')::integer,0),
+		       COALESCE((model_response->>'charged_tokens')::integer,0),
+		       COALESCE(error_message,''),created_at
+		FROM agent_iterations
+		WHERE tenant_id=$1 AND agent_run_id=$2
+		ORDER BY iteration_no`, s.tenantID, runID)
+	if err != nil {
+		return RunTrace{}, fmt.Errorf("list model iterations: %w", err)
+	}
+	for iterationRows.Next() {
+		var iteration IterationTrace
+		if err := iterationRows.Scan(
+			&iteration.Iteration, &iteration.Status, &iteration.FinishReason,
+			&iteration.PromptTokens, &iteration.CompletionTokens, &iteration.DurationMS,
+			&iteration.ReturnedToolCallCount, &iteration.ReservedTokens, &iteration.ChargedTokens,
+			&iteration.ErrorMessage, &iteration.StartedAt,
+		); err != nil {
+			iterationRows.Close()
+			return RunTrace{}, fmt.Errorf("scan model iteration: %w", err)
+		}
+		run.Iterations = append(run.Iterations, iteration)
+	}
+	if err := iterationRows.Err(); err != nil {
+		iterationRows.Close()
+		return RunTrace{}, fmt.Errorf("model iteration rows: %w", err)
+	}
+	iterationRows.Close()
+	if run.Iterations == nil {
+		run.Iterations = []IterationTrace{}
 	}
 
 	rows, err := s.pool.Query(ctx, `

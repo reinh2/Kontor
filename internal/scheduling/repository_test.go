@@ -51,7 +51,7 @@ func TestValidateCreateBooking(t *testing.T) {
 	t.Parallel()
 	valid := CreateBookingRequest{
 		CustomerID: "customer", ServiceID: "service", StaffID: "staff",
-		StartsAt: time.Now(), IdempotencyKey: "abcdefghijklmnop",
+		StartsAt: time.Now().Add(time.Hour), IdempotencyKey: "abcdefghijklmnop",
 	}
 	if err := validateCreateBooking(valid); err != nil {
 		t.Fatalf("valid request rejected: %v", err)
@@ -60,6 +60,27 @@ func TestValidateCreateBooking(t *testing.T) {
 	invalid.IdempotencyKey = "short"
 	if err := validateCreateBooking(invalid); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestValidateCreateBookingRejectsNonFutureStart(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.July, 22, 9, 0, 0, 0, time.UTC)
+	base := CreateBookingRequest{
+		CustomerID: "customer", ServiceID: "service", StaffID: "staff",
+		IdempotencyKey: "abcdefghijklmnop",
+	}
+	for _, startsAt := range []time.Time{now.Add(-time.Hour), now} {
+		request := base
+		request.StartsAt = startsAt
+		if err := validateCreateBookingAt(request, now); !errors.Is(err, ErrSlotUnavailable) {
+			t.Fatalf("start %s: expected ErrSlotUnavailable, got %v", startsAt, err)
+		}
+	}
+	request := base
+	request.StartsAt = now.Add(time.Nanosecond)
+	if err := validateCreateBookingAt(request, now); err != nil {
+		t.Fatalf("future start rejected: %v", err)
 	}
 }
 
@@ -310,7 +331,12 @@ func integrationFixture(t *testing.T) (*pgxpool.Pool, testFixture) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.day = time.Date(2026, time.July, 20, 0, 0, 0, 0, location)
+	// Keep booking integration tests future-safe regardless of when they run;
+	// the fixture rule below is Monday-only.
+	base := time.Now().In(location).AddDate(0, 0, 2)
+	daysUntilMonday := (int(time.Monday) - int(base.Weekday()) + 7) % 7
+	base = base.AddDate(0, 0, daysUntilMonday)
+	fixture.day = time.Date(base.Year(), base.Month(), base.Day(), 0, 0, 0, 0, location)
 	_, err = pool.Exec(ctx, `
 		INSERT INTO services
 		    (tenant_id, id, slug, name, duration_minutes, buffer_before_minutes, buffer_after_minutes, price_minor, currency)
@@ -342,8 +368,8 @@ func assertNestedToolAttempts(t *testing.T, pool *pgxpool.Pool, conversationID s
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_iterations (tenant_id, agent_run_id, iteration_no)
-		VALUES ($1, $2, 1) RETURNING id::text`, DefaultTenantID, runID).Scan(&iterationID); err != nil {
+			INSERT INTO agent_iterations (tenant_id, agent_run_id, iteration_no, status)
+			VALUES ($1, $2, 1, 'succeeded') RETURNING id::text`, DefaultTenantID, runID).Scan(&iterationID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `

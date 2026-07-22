@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/reinhlord/kontor/internal/llm"
@@ -46,6 +47,9 @@ type ConservativeTokenEstimator struct {
 	BaseOverhead       int
 	PerMessageOverhead int
 	PerToolOverhead    int
+	// ProviderAttempts reserves the worst-case cost of retries performed inside
+	// one Adapter.Complete call. A value below 1 means one attempt.
+	ProviderAttempts int
 }
 
 // Estimate implements TokenEstimator.
@@ -76,8 +80,16 @@ func (e ConservativeTokenEstimator) Estimate(request llm.Request) (int, error) {
 	for _, tool := range request.Tools {
 		bytes += len(tool.Name) + len(tool.Description) + len(tool.Parameters)
 	}
-	return request.MaxOutputTokens + bytes + base +
-		(len(request.Messages) * perMessage) + (len(request.Tools) * perTool), nil
+	perAttempt := request.MaxOutputTokens + bytes + base +
+		(len(request.Messages) * perMessage) + (len(request.Tools) * perTool)
+	attempts := e.ProviderAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	if perAttempt > math.MaxInt/attempts {
+		return 0, errors.New("agent: token reservation estimate overflow")
+	}
+	return perAttempt * attempts, nil
 }
 
 // MemoryTokenBudget enforces one fixed hard cap per conversation. Accounted

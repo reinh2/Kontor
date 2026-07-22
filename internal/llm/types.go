@@ -44,10 +44,21 @@ type ToolDefinition struct {
 	Parameters  json.RawMessage
 }
 
+// ToolChoice controls whether a model may answer without selecting a tool.
+// The production agent requires a tool because customer-facing replies use a
+// server-validated terminal control call rather than unstructured text.
+type ToolChoice string
+
+const (
+	ToolChoiceAuto     ToolChoice = "auto"
+	ToolChoiceRequired ToolChoice = "required"
+)
+
 // Request contains one non-streaming model turn.
 type Request struct {
 	Messages        []Message
 	Tools           []ToolDefinition
+	ToolChoice      ToolChoice
 	MaxOutputTokens int
 }
 
@@ -74,6 +85,10 @@ type Response struct {
 	Message      Message
 	FinishReason string
 	Usage        Usage
+	// UsageIncomplete means at least one provider attempt may have consumed
+	// tokens without returning usage. The runner must conservatively charge its
+	// full worst-case reservation instead of crediting unknown spend.
+	UsageIncomplete bool
 }
 
 // Adapter is implemented by real and deterministic model providers.

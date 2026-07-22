@@ -21,7 +21,23 @@ const (
 	ToolUpsertContact = "upsert_crm_contact"
 	ToolCreateDeal    = "create_deal"
 	ToolEscalate      = "escalate_to_human"
+	// ToolRespondToCustomer is a runner-local terminal control call. It is
+	// advertised through the same strict contract registry as domain tools but
+	// must never be dispatched to a backend.
+	ToolRespondToCustomer = "respond_to_customer"
 )
+
+type CustomerResponseDisposition string
+
+const (
+	ResponseComplete            CustomerResponseDisposition = "complete"
+	ResponseClarificationNeeded CustomerResponseDisposition = "clarification_needed"
+)
+
+type RespondToCustomerArguments struct {
+	Disposition CustomerResponseDisposition `json:"disposition"`
+	Message     string                      `json:"message"`
+}
 
 type Capability string
 
@@ -37,11 +53,15 @@ const (
 // TrustedContext is created from the authenticated channel/session. None of
 // these values may be copied from LLM arguments.
 type TrustedContext struct {
-	TenantID         string
-	CustomerID       string
-	ConversationID   string
-	InboundMessageID string
-	Capabilities     map[Capability]bool
+	TenantID            string
+	CustomerID          string
+	CustomerDisplayName string
+	CustomerEmail       string
+	CustomerPhone       string
+	ConversationID      string
+	InboundMessageID    string
+	AgentRunID          string
+	Capabilities        map[Capability]bool
 }
 
 func (c TrustedContext) Allows(capability Capability) bool {
@@ -86,6 +106,10 @@ type Result struct {
 	Confirmation    *ConfirmationProposal `json:"confirmation,omitempty"`
 	Error           *ToolError            `json:"error,omitempty"`
 	Meta            ResultMeta            `json:"meta"`
+	// SideEffectCommitted is server-only evidence that a durable mutation
+	// completed even if a later bookkeeping step made the model-facing result
+	// an error. It must never be inferred from model-authored data.
+	SideEffectCommitted bool `json:"-"`
 }
 
 type ResultMeta struct {
@@ -236,6 +260,26 @@ type CreateBookingData struct {
 	CalendarSync string  `json:"calendar_sync"`
 }
 
+type EscalationCommand struct {
+	TenantID        string
+	OwnerCustomerID string
+	ConversationID  string
+	AgentRunID      string
+	ToolCallID      string
+	ReasonCode      string
+	Summary         string
+}
+
+type EscalationOutcome struct {
+	ID       string `json:"id"`
+	Status   string `json:"status"`
+	Replayed bool   `json:"replayed"`
+}
+
+type EscalationData struct {
+	Escalation EscalationOutcome `json:"escalation"`
+}
+
 // Backend is intentionally narrow so scheduling/Postgres can be adapted
 // without depending on agent/provider types.
 type Backend interface {
@@ -243,6 +287,7 @@ type Backend interface {
 	ListStaff(ctx context.Context, tenantID, serviceID string) ([]Staff, error)
 	FindSlots(ctx context.Context, query FindSlotsQuery) ([]AvailableSlot, error)
 	CreateBooking(ctx context.Context, command CreateBookingCommand) (CreateBookingOutcome, error)
+	Escalate(ctx context.Context, command EscalationCommand) (EscalationOutcome, error)
 }
 
 var (

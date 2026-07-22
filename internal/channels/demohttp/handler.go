@@ -3,6 +3,7 @@
 package demohttp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,21 +12,34 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/reinhlord/kontor/internal/agenttrace"
 	"github.com/reinhlord/kontor/internal/app"
 	"github.com/reinhlord/kontor/internal/conversations"
 	"github.com/reinhlord/kontor/internal/platform/ids"
 )
 
+type applicationService interface {
+	CreateConversation(context.Context, conversations.Profile) (conversations.Conversation, error)
+	VerifyConversationCapability(context.Context, string, string) error
+	SendMessage(context.Context, string, string, string) (app.TurnResult, error)
+}
+
+type traceReader interface {
+	GetRun(context.Context, string) (agenttrace.RunTrace, error)
+}
+
+type readinessChecker interface {
+	Ping(context.Context) error
+}
+
 type Handler struct {
-	app    *app.Service
-	trace  *agenttrace.Store
-	pool   *pgxpool.Pool
+	app    applicationService
+	trace  traceReader
+	pool   readinessChecker
 	logger *slog.Logger
 }
 
-func New(application *app.Service, trace *agenttrace.Store, pool *pgxpool.Pool, logger *slog.Logger) http.Handler {
+func New(application applicationService, trace traceReader, pool readinessChecker, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -68,16 +82,21 @@ func (h *Handler) createConversation(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusBadRequest, "conversation rejected", err.Error())
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"conversation_id": created.ID,
-		"customer_id":     created.CustomerID,
-		"token_budget":    created.TokenBudget,
-		"tenant_scope":    "fixed",
+		"conversation_id":  created.ID,
+		"capability_token": created.CapabilityToken,
+		"customer_id":      created.CustomerID,
+		"token_budget":     created.TokenBudget,
+		"tenant_scope":     "fixed",
 	})
 }
 
 func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 	conversationID := r.PathValue("conversationID")
+	if !h.requireConversationCapability(w, r, conversationID) {
+		return
+	}
 	var input struct {
 		ClientMessageID string `json:"client_message_id"`
 		Text            string `json:"text"`
@@ -91,6 +110,11 @@ func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.app.SendMessage(r.Context(), conversationID, input.Text, input.ClientMessageID)
 	if err != nil {
+		if errors.Is(err, app.ErrTurnOverloaded) {
+			w.Header().Set("Retry-After", "1")
+			writeProblem(w, http.StatusServiceUnavailable, "service busy", "Too many conversation turns are active; retry shortly")
+			return
+		}
 		status := http.StatusInternalServerError
 		if errors.Is(err, conversations.ErrNotFound) {
 			status = http.StatusNotFound
@@ -111,7 +135,41 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusInternalServerError, "trace failed", err.Error())
 		return
 	}
+	if !h.requireConversationCapability(w, r, run.ConversationID) {
+		return
+	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+func (h *Handler) requireConversationCapability(w http.ResponseWriter, r *http.Request, conversationID string) bool {
+	token, ok := bearerToken(r.Header.Get("Authorization"))
+	if !ok {
+		writeAuthProblem(w, "A valid conversation Bearer token is required")
+		return false
+	}
+	if err := h.app.VerifyConversationCapability(r.Context(), conversationID, token); err != nil {
+		switch {
+		case errors.Is(err, conversations.ErrNotFound):
+			writeProblem(w, http.StatusNotFound, "conversation not found", "The requested conversation does not exist")
+		case errors.Is(err, conversations.ErrUnauthorized):
+			writeAuthProblem(w, "The conversation Bearer token is invalid")
+		default:
+			writeProblem(w, http.StatusInternalServerError, "authorization failed", "The conversation could not be authorized")
+		}
+		return false
+	}
+	return true
+}
+
+func bearerToken(header string) (string, bool) {
+	if len(header) > 512 {
+		return "", false
+	}
+	fields := strings.Fields(header)
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") || fields[1] == "" {
+		return "", false
+	}
+	return fields[1], true
 }
 
 func (h *Handler) recover(next http.Handler) http.Handler {
@@ -159,4 +217,9 @@ func writeProblem(w http.ResponseWriter, status int, title, detail string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"type": "about:blank", "title": title, "status": status, "detail": detail,
 	})
+}
+
+func writeAuthProblem(w http.ResponseWriter, detail string) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="kontor-demo"`)
+	writeProblem(w, http.StatusUnauthorized, "unauthorized", detail)
 }

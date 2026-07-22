@@ -37,14 +37,18 @@ The images are static exports from [`design/screens`](design/screens); the repos
 
 ## What it does
 
-- Runs the haircut flow locally without an API key through a deterministic model substitute; OpenRouter is available as the real model adapter.
+- Runs the haircut flow locally without an API key through a deterministic model substitute, or through the real OpenRouter Chat Completions adapter added in Stage 1. The OpenRouter path sends the exact tool schemas, accepts tool calls, and retries bounded transient provider failures.
 - Lists services and eligible staff, then calculates slots on a 15-minute grid across working hours, breaks, booking buffers, busy periods, and IANA time zones, including daylight-saving transitions.
+- Rejects searches and bookings outside the temporal safety window: 15 minutes of minimum lead time, a 365-day booking horizon, and a 31-day maximum search range. Booking creation also rechecks against the PostgreSQL clock so a queued request cannot cross into the past.
 - Requires a server-authorized, argument-bound confirmation before creating a booking. Slot offers expire after 5 minutes; confirmation proposals have a 10-minute ceiling and cannot outlive the slot offer.
 - Rechecks availability inside a serializable transaction and uses both a per-staff/day lock and a PostgreSQL exclusion constraint to prevent double-booking.
 - Makes booking requests idempotent, so a repeated client request returns the original booking instead of creating another one.
-- Persists customers, conversations, messages, agent runs, model iterations, tool calls, retry attempts, bookings, and booking events in PostgreSQL.
-- Exposes a small JSON demo API for creating a conversation, sending messages, and inspecting a run trace.
-- Bounds each turn to 8 model iterations and 25 seconds by default. Retryable tool failures get at most 3 attempts, each with a 5-second timeout and capped exponential backoff.
+- Handles multiple tool calls returned in one model response. Calls are processed sequentially in response order and all results are appended before the next model request; after a terminal refusal or human hand-off, remaining siblings are traced as skipped and are never executed.
+- Persists customers, conversations, messages, agent runs, model iterations, parent tool calls, one-based child retry attempts, bookings, booking events, escalations, and dead-letter events in PostgreSQL.
+- Exposes a small JSON demo API. Conversation creation returns an opaque, conversation-scoped bearer capability once; sending messages and reading traces require it, and only its SHA-256 digest is stored.
+- Enforces a persisted 50,000-token hard cap per conversation by atomically reserving a conservative allowance—including the provider's worst-case retry count—before every model request and settling aggregate usage afterward.
+- Executes `escalate_to_human` as a durable hand-off. Provider and bounded-loop failures return a safe customer message, create an escalation, and retain a dead-letter event for inspection or replay.
+- Bounds each turn to 8 model iterations and 25 seconds by default. Retryable tool failures get at most 3 attempts, each with a 5-second timeout and capped exponential backoff; OpenRouter requests separately get at most 3 attempts within one provider deadline.
 
 ## Quick start
 
@@ -56,7 +60,9 @@ cd kontor
 docker compose up --build
 ```
 
-The service listens on `http://localhost:8080`; [the health endpoint](http://localhost:8080/healthz) returns JSON when startup is complete. Its Stage 1 endpoints are under `/api/v1/demo`, and `/readyz` exposes database readiness. To use a real model, copy [`.env.example`](.env.example), set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and `OPENROUTER_MODEL`, then restart Compose.
+The service listens on `http://localhost:8080`; [the health endpoint](http://localhost:8080/healthz) returns JSON when startup is complete. Its Stage 1 endpoints are under `/api/v1/demo`, and `/readyz` exposes database readiness. `POST /api/v1/demo/conversations` returns a `capability_token` only in its creation response. Pass it as `Authorization: Bearer <capability_token>` when sending messages or reading that conversation's run traces.
+
+To exercise real tool-calling behavior, copy [`.env.example`](.env.example), set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and `OPENROUTER_MODEL`, then restart Compose. This switches the same bounded agent loop and server-side tool gateway from the deterministic adapter to OpenRouter; it does not bypass confirmation, capabilities, budgets, or scheduling checks.
 
 ## Architecture
 
@@ -80,21 +86,26 @@ The model can request actions, but it never owns identity, authorization, or the
 
 ## Design decisions
 
+- **Scope one tenant without erasing tenancy.** Every business key retains `tenant_id`, but this build resolves one fixed tenant from configuration and intentionally has no tenant onboarding or tenant-management UI.
+- **Keep the first schema small.** The Stage 1 migration contains only data needed now that also carries into planned Stages 2–3. Channel delivery, reminder/outbox, CRM, identity, billing, and operator-UI tables arrive with the stage that uses them instead of being pre-created.
 - **Propose, then act.** A mutating tool first returns an exact summary. A later, unambiguous customer message authorizes only those frozen arguments.
-- **Keep authority outside the prompt.** Tenant, customer, conversation, inbound-message identity, and capabilities are resolved from persisted server state rather than model-authored JSON.
+- **Keep authority outside the prompt.** Tenant, customer profile, conversation, inbound-message identity, and capabilities are resolved from persisted server state rather than model-authored JSON; model-supplied customer details are never used for a booking.
 - **Make the database the final arbiter.** Signed slot tokens improve the hand-off, but the booking transaction still locks and rechecks the schedule before inserting.
-- **Bound autonomy.** Iteration, time, output-token, conversation-token, and retry limits turn failure into a controlled escalation rather than an unbounded loop.
-- **Record the parent action and its attempts.** One tool call stays readable in the trace even when the executor retries underneath it.
+- **Consume complete model responses safely.** If a response contains several tool calls, the loop handles them sequentially in response order before asking the model again. A refusal or successful hand-off is terminal for that batch, so later calls are recorded as skipped rather than executed.
+- **Bound autonomy and spend.** Iteration, time, output-token, provider-retry, tool-retry, and persisted conversation-token limits turn failure into a controlled escalation rather than an unbounded loop.
+- **Record the parent action and its attempts.** Each model-emitted tool call has one `tool_executions` parent; retries are nested `tool_execution_attempts` numbered from 1, matching the expandable trace design.
+- **Fail visibly after saving input.** Provider and agent-loop failures leave the inbound message, safe fallback, escalation, failed run trace, and dead-letter event in durable storage.
 
 ## Limitations
 
 Kontor is a demonstration project, not a production booking service.
 
-- It runs as one fixed demo tenant (`Salon Nord`); there is no authentication, tenant onboarding, or tenant-management UI.
+- It runs as one fixed demo tenant (`Salon Nord`); there is no user identity system, tenant onboarding, or tenant-management UI. The demo API does enforce a generated bearer capability on each conversation after creation, but that is not a full authentication or account system.
 - The HTTP surface is a JSON demo API. The web widget, Telegram channel, streaming updates, operator dashboard, trace viewer, and calendar shown above are designs, not wired application screens.
-- Only `list_services`, `list_staff`, `find_slots`, and `create_booking` execute. Reschedule, cancellation, CRM contact/deal, and model-requested human-escalation contracts are allowlisted but return `NOT_IMPLEMENTED`; runtime failures can still create an escalation record.
+- `list_services`, `list_staff`, `find_slots`, `create_booking`, and `escalate_to_human` execute. Rescheduling, cancellation, and CRM contact/deal contracts remain allowlisted but return `NOT_IMPLEMENTED` for later stages.
 - There is no HubSpot or CSV CRM adapter in this codebase yet, and no outbound email, SMS, or reminder sender. A customer row is stored in Kontor’s own database only.
 - Calendar synchronization is currently a `noop`; PostgreSQL is the appointment source of truth for the demo.
+- Explicit requests for a person and server-side tool refusals are enforced hand-offs. The instruction to escalate after three failed attempts to understand a request is currently a model policy, not an independently persisted server counter.
 - The `2.9 s` dashboard median is illustrative fixture data. The backend records individual run durations but does not yet aggregate operational metrics.
 - The default secret and database credentials are demo values and must not be used outside a local environment.
 

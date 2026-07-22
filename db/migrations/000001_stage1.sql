@@ -133,6 +133,11 @@ CREATE TABLE conversations (
     channel         text NOT NULL CHECK (channel IN ('web', 'telegram', 'demo')),
     channel_ref     text,
     status          text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'waiting_confirmation', 'escalated', 'closed')),
+    -- Server-owned count of consecutive structured clarification outcomes.
+    -- The model never supplies an attempt number; reaching three is an
+    -- unconditional hand-off enforced while the reply is persisted.
+    consecutive_clarification_failures smallint NOT NULL DEFAULT 0
+        CHECK (consecutive_clarification_failures BETWEEN 0 AND 3),
     -- Reservations allow concurrent turns to atomically claim capacity.  The
     -- cross-column check is the database-enforced per-conversation hard cap.
     token_budget    integer NOT NULL DEFAULT 50000 CHECK (token_budget BETWEEN 1 AND 100000),
@@ -144,8 +149,12 @@ CREATE TABLE conversations (
     FOREIGN KEY (tenant_id) REFERENCES tenants (id),
     FOREIGN KEY (tenant_id, customer_id) REFERENCES customers (tenant_id, id),
     CHECK (tokens_used + tokens_reserved <= token_budget),
+    CHECK (consecutive_clarification_failures < 3 OR status = 'escalated'),
     UNIQUE (tenant_id, id, customer_id)
 );
+
+COMMENT ON COLUMN conversations.channel_ref IS
+    'For the Stage 1 demo channel, stores only the hex SHA-256 digest of the one-time conversation capability token; never the raw token.';
 
 CREATE UNIQUE INDEX conversations_channel_ref_uq
     ON conversations (tenant_id, channel, channel_ref)
@@ -308,11 +317,13 @@ CREATE TABLE agent_iterations (
     id               uuid NOT NULL DEFAULT gen_random_uuid(),
     agent_run_id     uuid NOT NULL,
     iteration_no     integer NOT NULL CHECK (iteration_no BETWEEN 1 AND 64),
+    status           text NOT NULL CHECK (status IN ('succeeded', 'failed')),
     finish_reason    text,
     prompt_tokens    integer NOT NULL DEFAULT 0 CHECK (prompt_tokens >= 0),
     completion_tokens integer NOT NULL DEFAULT 0 CHECK (completion_tokens >= 0),
     duration_ms      integer NOT NULL DEFAULT 0 CHECK (duration_ms >= 0),
     model_response   jsonb CHECK (model_response IS NULL OR octet_length(model_response::text) <= 262144),
+    error_message    text CHECK (error_message IS NULL OR length(error_message) <= 2000),
     created_at       timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant_id, id),
     FOREIGN KEY (tenant_id, agent_run_id) REFERENCES agent_runs (tenant_id, id) ON DELETE CASCADE,
@@ -416,6 +427,7 @@ CREATE TABLE escalations (
     conversation_id uuid NOT NULL,
     customer_id     uuid,
     agent_run_id    uuid,
+    source_tool_call_id text CHECK (source_tool_call_id IS NULL OR length(source_tool_call_id) BETWEEN 1 AND 200),
     reason_code     text NOT NULL CHECK (length(reason_code) BETWEEN 1 AND 100),
     summary         text NOT NULL CHECK (length(summary) BETWEEN 1 AND 2000),
     status          text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'claimed', 'resolved')),
@@ -434,3 +446,38 @@ CREATE TABLE escalations (
 CREATE INDEX escalations_open_idx
     ON escalations (tenant_id, created_at)
     WHERE status IN ('open', 'claimed');
+CREATE UNIQUE INDEX escalations_tool_call_uq
+    ON escalations (tenant_id, agent_run_id, source_tool_call_id)
+    WHERE source_tool_call_id IS NOT NULL;
+
+-- Save-first agent failures are retained for operator replay/inspection rather
+-- than disappearing after the customer-facing fallback is written. Stage 2's
+-- bounded channel queue can use the same dead-letter shape.
+CREATE TABLE dead_letter_events (
+    tenant_id         uuid NOT NULL,
+    id                uuid NOT NULL DEFAULT gen_random_uuid(),
+    conversation_id   uuid NOT NULL,
+    customer_id       uuid NOT NULL,
+    agent_run_id      uuid NOT NULL,
+    trigger_message_id uuid NOT NULL,
+    event_type        text NOT NULL CHECK (event_type IN ('agent_turn_failed')),
+    reason_code       text NOT NULL CHECK (length(reason_code) BETWEEN 1 AND 100),
+    payload_json      jsonb NOT NULL CHECK (octet_length(payload_json::text) <= 65536),
+    status            text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'resolved')),
+    replay_attempts   integer NOT NULL DEFAULT 0 CHECK (replay_attempts BETWEEN 0 AND 100),
+    last_error        text CHECK (last_error IS NULL OR length(last_error) <= 2000),
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    resolved_at       timestamptz,
+    PRIMARY KEY (tenant_id, id),
+    FOREIGN KEY (tenant_id, conversation_id, customer_id)
+        REFERENCES conversations (tenant_id, id, customer_id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, agent_run_id, conversation_id)
+        REFERENCES agent_runs (tenant_id, id, conversation_id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, trigger_message_id, conversation_id)
+        REFERENCES messages (tenant_id, id, conversation_id),
+    CHECK ((status = 'resolved') = (resolved_at IS NOT NULL))
+);
+
+CREATE INDEX dead_letter_events_pending_idx
+    ON dead_letter_events (tenant_id, created_at, id)
+    WHERE status = 'pending';

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,6 +29,9 @@ type fakeBackend struct {
 	lastCreate  CreateBookingCommand
 	createErr   error
 	findQuery   FindSlotsQuery
+	findCalls   int
+	onFind      func()
+	escalations []EscalationCommand
 }
 
 func (b *fakeBackend) ListServices(context.Context, string) ([]Service, error) {
@@ -39,7 +43,11 @@ func (b *fakeBackend) ListStaff(context.Context, string, string) ([]Staff, error
 }
 
 func (b *fakeBackend) FindSlots(_ context.Context, query FindSlotsQuery) ([]AvailableSlot, error) {
+	b.findCalls++
 	b.findQuery = query
+	if b.onFind != nil {
+		b.onFind()
+	}
 	return b.slots, nil
 }
 
@@ -61,9 +69,19 @@ func (b *fakeBackend) CreateBooking(_ context.Context, command CreateBookingComm
 	}, nil
 }
 
+func (b *fakeBackend) Escalate(_ context.Context, command EscalationCommand) (EscalationOutcome, error) {
+	b.escalations = append(b.escalations, command)
+	return EscalationOutcome{
+		ID: "99999999-9999-4999-8999-999999999999", Status: "open",
+		Replayed: len(b.escalations) > 1,
+	}, nil
+}
+
 func testTrusted(messageID string) TrustedContext {
 	return TrustedContext{
-		TenantID: testTenant, CustomerID: testCustomer, ConversationID: testConversation,
+		TenantID: testTenant, CustomerID: testCustomer,
+		CustomerDisplayName: "Persisted Customer", CustomerEmail: "persisted@example.com",
+		ConversationID:   testConversation,
 		InboundMessageID: messageID,
 		Capabilities: map[Capability]bool{
 			CapabilityScheduleRead: true, CapabilityBookingCreateSelf: true,
@@ -73,7 +91,7 @@ func testTrusted(messageID string) TrustedContext {
 	}
 }
 
-func newTestGateway(t *testing.T, backend *fakeBackend, store *MemoryConfirmationStore) *Gateway {
+func newTestGateway(t *testing.T, backend *fakeBackend, store ConfirmationStore) *Gateway {
 	t.Helper()
 	gateway, err := NewGateway(Config{
 		Backend: backend, Confirmations: store,
@@ -84,6 +102,14 @@ func newTestGateway(t *testing.T, backend *fakeBackend, store *MemoryConfirmatio
 		t.Fatalf("NewGateway: %v", err)
 	}
 	return gateway
+}
+
+type failingMarkConsumedStore struct {
+	*MemoryConfirmationStore
+}
+
+func (s failingMarkConsumedStore) MarkConsumed(context.Context, string, ConfirmationBinding, time.Time) error {
+	return errors.New("simulated confirmation persistence failure")
 }
 
 func rawArguments(t *testing.T, value any) json.RawMessage {
@@ -125,6 +151,7 @@ func TestDefinitionsAreExactAllowlist(t *testing.T) {
 	want := []string{
 		ToolListServices, ToolListStaff, ToolFindSlots, ToolCreateBooking,
 		ToolReschedule, ToolCancel, ToolUpsertContact, ToolCreateDeal, ToolEscalate,
+		ToolRespondToCustomer,
 	}
 	if len(definitions) != len(want) {
 		t.Fatalf("got %d definitions, want %d", len(definitions), len(want))
@@ -135,6 +162,31 @@ func TestDefinitionsAreExactAllowlist(t *testing.T) {
 		}
 		if !json.Valid(definitions[i].Parameters) {
 			t.Fatalf("definition %s has invalid JSON Schema", definitions[i].Name)
+		}
+	}
+}
+
+func TestRespondToCustomerContractIsStrict(t *testing.T) {
+	t.Parallel()
+	valid := json.RawMessage(`{"disposition":"clarification_needed","message":"Which service would you like?"}`)
+	arguments, err := ParseRespondToCustomerArguments(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if arguments.Disposition != ResponseClarificationNeeded || arguments.Message != "Which service would you like?" {
+		t.Fatalf("arguments = %#v", arguments)
+	}
+
+	invalid := []json.RawMessage{
+		json.RawMessage(`{"disposition":"complete","message":"ok","extra":true}`),
+		json.RawMessage(`{"disposition":"complete","disposition":"clarification_needed","message":"question"}`),
+		json.RawMessage(`{"disposition":"unknown","message":"question"}`),
+		json.RawMessage(`{"disposition":"complete","message":"   "}`),
+		json.RawMessage(`{"disposition":"complete","message":"` + strings.Repeat("x", 2001) + `"}`),
+	}
+	for index, raw := range invalid {
+		if _, err := ParseRespondToCustomerArguments(raw); err == nil {
+			t.Fatalf("invalid contract case %d was accepted", index)
 		}
 	}
 }
@@ -261,6 +313,161 @@ func TestFindSlotsIssuesScopedToken(t *testing.T) {
 	}
 }
 
+func TestGatewayBookingWindowDefaultsAndConfigValidation(t *testing.T) {
+	gateway := newTestGateway(t, &fakeBackend{}, NewMemoryConfirmationStore())
+	if gateway.minBookingLeadTime != 15*time.Minute || gateway.maxBookingHorizon != 365*24*time.Hour {
+		t.Fatalf("default booking window = lead %s horizon %s", gateway.minBookingLeadTime, gateway.maxBookingHorizon)
+	}
+	_, err := NewGateway(Config{
+		Backend: &fakeBackend{}, Confirmations: NewMemoryConfirmationStore(),
+		SlotSigningKey:     []byte("0123456789abcdef0123456789abcdef"),
+		MinBookingLeadTime: 2 * time.Hour, MaxBookingHorizon: time.Hour,
+	})
+	if err == nil {
+		t.Fatal("expected horizon shorter than lead time to be rejected")
+	}
+	configured, err := NewGateway(Config{
+		Backend: &fakeBackend{}, Confirmations: NewMemoryConfirmationStore(),
+		SlotSigningKey:     []byte("0123456789abcdef0123456789abcdef"),
+		MinBookingLeadTime: 2 * time.Hour, MaxBookingHorizon: 30 * 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.minBookingLeadTime != 2*time.Hour || configured.maxBookingHorizon != 30*24*time.Hour {
+		t.Fatalf("configured booking window = lead %s horizon %s", configured.minBookingLeadTime, configured.maxBookingHorizon)
+	}
+}
+
+func TestFindSlotsRejectsPastTooSoonAndFarFutureSearches(t *testing.T) {
+	tests := []struct {
+		name string
+		from time.Time
+		to   time.Time
+	}{
+		{name: "past", from: testNow.Add(-time.Hour), to: testNow.Add(time.Hour)},
+		{name: "too soon", from: testNow.Add(14 * time.Minute), to: testNow.Add(time.Hour)},
+		{name: "far future", from: testNow.Add(364 * 24 * time.Hour), to: testNow.Add(365*24*time.Hour + time.Minute)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &fakeBackend{}
+			gateway := newTestGateway(t, backend, NewMemoryConfirmationStore())
+			result := gateway.Execute(context.Background(), testTrusted("message-1"), Call{
+				Name: ToolFindSlots,
+				Arguments: rawArguments(t, map[string]any{
+					"service_id": testService,
+					"date_from":  test.from.Format(time.RFC3339),
+					"date_to":    test.to.Format(time.RFC3339),
+				}),
+			})
+			if result.Error == nil || result.Error.Code != CodeInvalidArgument {
+				t.Fatalf("result = %#v, want INVALID_ARGUMENT", result)
+			}
+			if backend.findCalls != 0 {
+				t.Fatalf("unsafe search reached backend %d times", backend.findCalls)
+			}
+		})
+	}
+}
+
+func TestFindSlotsDoesNotSignCandidateThatAgesInsideLeadTime(t *testing.T) {
+	clock := testNow
+	backend := &fakeBackend{slots: []AvailableSlot{{
+		ServiceID: testService, ServiceName: "Consultation", StaffID: testStaff,
+		StaffName: "Ada", StartAt: testNow.Add(16 * time.Minute),
+		EndAt: testNow.Add(46 * time.Minute), Timezone: "Europe/Berlin",
+	}}}
+	backend.onFind = func() { clock = testNow.Add(2 * time.Minute) }
+	gateway, err := NewGateway(Config{
+		Backend: backend, Confirmations: NewMemoryConfirmationStore(),
+		SlotSigningKey: []byte("0123456789abcdef0123456789abcdef"),
+		Now:            func() time.Time { return clock },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := gateway.Execute(context.Background(), testTrusted("message-1"), Call{
+		Name: ToolFindSlots,
+		Arguments: rawArguments(t, map[string]any{
+			"service_id": testService,
+			"date_from":  testNow.Add(15 * time.Minute).Format(time.RFC3339),
+			"date_to":    testNow.Add(time.Hour).Format(time.RFC3339),
+		}),
+	})
+	data, ok := result.Data.(FindSlotsData)
+	if result.Status != StatusSuccess || !ok || len(data.Slots) != 0 {
+		t.Fatalf("aged slot result = %#v, want safe empty success", result)
+	}
+}
+
+func TestFindSlotsCapsTokenExpiryAtLeadTimeBoundary(t *testing.T) {
+	start := testNow.Add(18 * time.Minute)
+	backend := &fakeBackend{slots: []AvailableSlot{{
+		ServiceID: testService, ServiceName: "Consultation", StaffID: testStaff,
+		StaffName: "Ada", StartAt: start, EndAt: start.Add(30 * time.Minute),
+		Timezone: "Europe/Berlin",
+	}}}
+	gateway := newTestGateway(t, backend, NewMemoryConfirmationStore())
+	result := gateway.Execute(context.Background(), testTrusted("message-1"), Call{
+		Name: ToolFindSlots,
+		Arguments: rawArguments(t, map[string]any{
+			"service_id": testService,
+			"date_from":  testNow.Add(15 * time.Minute).Format(time.RFC3339),
+			"date_to":    testNow.Add(time.Hour).Format(time.RFC3339),
+		}),
+	})
+	data, ok := result.Data.(FindSlotsData)
+	if result.Status != StatusSuccess || !ok || len(data.Slots) != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	wantExpiry := start.Add(-15 * time.Minute)
+	if !data.Slots[0].ExpiresAt.Equal(wantExpiry) {
+		t.Fatalf("token expiry = %s, want lead boundary %s", data.Slots[0].ExpiresAt, wantExpiry)
+	}
+	claims, err := gateway.signer.Verify(data.Slots[0].SlotToken, testTrusted("message-1"), testNow)
+	if err != nil || !claims.ExpiresAt.Equal(wantExpiry) {
+		t.Fatalf("signed claims = %#v, err = %v", claims, err)
+	}
+}
+
+func TestCreateBookingRejectsPastTooSoonAndFarFutureSlotClaims(t *testing.T) {
+	tests := []struct {
+		name  string
+		start time.Time
+	}{
+		{name: "past", start: testNow.Add(-time.Hour)},
+		{name: "too soon", start: testNow.Add(14 * time.Minute)},
+		{name: "far future", start: testNow.Add(366 * 24 * time.Hour)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &fakeBackend{}
+			store := NewMemoryConfirmationStore()
+			gateway := newTestGateway(t, backend, store)
+			trusted := testTrusted("message-1")
+			token, err := gateway.signer.Sign(SlotClaims{
+				TenantID: trusted.TenantID, ConversationID: trusted.ConversationID,
+				ServiceID: testService, StaffID: testStaff,
+				StartAt: test.start, EndAt: test.start.Add(30 * time.Minute),
+				Timezone: "Europe/Berlin", ExpiresAt: testNow.Add(5 * time.Minute),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := gateway.Execute(context.Background(), trusted, Call{
+				Name: ToolCreateBooking, Arguments: rawArguments(t, validCreateArguments(token)),
+			})
+			if result.Error == nil || result.Error.Code != CodeSlotUnavailable {
+				t.Fatalf("result = %#v, want SLOT_UNAVAILABLE", result)
+			}
+			if result.Confirmation != nil || backend.createCalls != 0 {
+				t.Fatalf("unsafe claim proposed or executed: result=%#v calls=%d", result, backend.createCalls)
+			}
+		})
+	}
+}
+
 func TestCreateBookingRequiresBoundAuthorizationAndUsesTrustedOwner(t *testing.T) {
 	backend := &fakeBackend{}
 	store := NewMemoryConfirmationStore()
@@ -286,6 +493,13 @@ func TestCreateBookingRequiresBoundAuthorizationAndUsesTrustedOwner(t *testing.T
 	if _, exists := frozen["confirmation_id"]; exists {
 		t.Fatal("frozen arguments include confirmation_id")
 	}
+	frozenCustomer, ok := frozen["customer"].(map[string]any)
+	if !ok || frozenCustomer["display_name"] != requestContext.CustomerDisplayName {
+		t.Fatalf("frozen customer = %#v, want trusted customer %q", frozen["customer"], requestContext.CustomerDisplayName)
+	}
+	if got := proposalResult.Confirmation.Facts[len(proposalResult.Confirmation.Facts)-1]; got.Label != "Customer" || got.Value != requestContext.CustomerDisplayName {
+		t.Fatalf("confirmation customer fact = %#v, want trusted customer", got)
+	}
 
 	arguments["confirmation_id"] = proposalResult.Confirmation.ID
 	unconfirmed := gateway.Execute(context.Background(), testTrusted("message-2"), Call{
@@ -298,6 +512,12 @@ func TestCreateBookingRequiresBoundAuthorizationAndUsesTrustedOwner(t *testing.T
 	if err := store.Authorize(context.Background(), proposalResult.Confirmation.ID, confirmedContext, testNow); err != nil {
 		t.Fatalf("authorize: %v", err)
 	}
+	// Even a different, schema-valid model identity cannot change the frozen
+	// action or the backend customer after the customer authorizes it.
+	arguments["customer"] = map[string]any{
+		"display_name": "Model-Supplied Mallory",
+		"contact":      map[string]any{"phone": "+4915222222222"},
+	}
 	executed := gateway.Execute(context.Background(), confirmedContext, Call{
 		ID: "create-3", Name: ToolCreateBooking, Arguments: rawArguments(t, arguments),
 	})
@@ -308,6 +528,11 @@ func TestCreateBookingRequiresBoundAuthorizationAndUsesTrustedOwner(t *testing.T
 		backend.lastCreate.ConversationID != testConversation {
 		t.Fatalf("backend received untrusted ownership: %#v", backend.lastCreate)
 	}
+	if backend.lastCreate.Customer.DisplayName != requestContext.CustomerDisplayName ||
+		backend.lastCreate.Customer.Contact.Email != requestContext.CustomerEmail ||
+		backend.lastCreate.Customer.Contact.Phone != requestContext.CustomerPhone {
+		t.Fatalf("backend received model-supplied customer profile: %#v", backend.lastCreate.Customer)
+	}
 
 	// Exact retries are safe: consumed authorization plus the bound idempotency
 	// key can only replay the same backend operation.
@@ -316,6 +541,33 @@ func TestCreateBookingRequiresBoundAuthorizationAndUsesTrustedOwner(t *testing.T
 	})
 	if replayed.Status != StatusSuccess || !replayed.Meta.IdempotencyReplayed || backend.createCalls != 2 {
 		t.Fatalf("replayed = %#v, calls = %d", replayed, backend.createCalls)
+	}
+}
+
+func TestCreateBookingSignalsCommittedSideEffectWhenConfirmationFinalizationFails(t *testing.T) {
+	backend := &fakeBackend{}
+	memory := NewMemoryConfirmationStore()
+	store := failingMarkConsumedStore{MemoryConfirmationStore: memory}
+	gateway := newTestGateway(t, backend, store)
+	proposalContext := testTrusted("message-1")
+	arguments := validCreateArguments(testSlotToken(t, gateway, proposalContext))
+	proposal := gateway.Execute(context.Background(), proposalContext, Call{
+		ID: "proposal", Name: ToolCreateBooking, Arguments: rawArguments(t, arguments),
+	})
+	if proposal.Confirmation == nil {
+		t.Fatalf("proposal = %#v", proposal)
+	}
+	confirmedContext := testTrusted("message-2")
+	if err := memory.Authorize(context.Background(), proposal.Confirmation.ID, confirmedContext, testNow); err != nil {
+		t.Fatal(err)
+	}
+	arguments["confirmation_id"] = proposal.Confirmation.ID
+	result := gateway.Execute(context.Background(), confirmedContext, Call{
+		ID: "commit", Name: ToolCreateBooking, Arguments: rawArguments(t, arguments),
+	})
+	if result.Status != StatusError || result.Error == nil || !result.Error.Retryable ||
+		!result.SideEffectCommitted || backend.createCalls != 1 {
+		t.Fatalf("result=%#v create calls=%d", result, backend.createCalls)
 	}
 }
 
@@ -350,10 +602,32 @@ func TestConfirmationRejectsChangedArgumentsAndCrossOwner(t *testing.T) {
 func TestKnownLaterToolReturnsNotImplemented(t *testing.T) {
 	gateway := newTestGateway(t, &fakeBackend{}, NewMemoryConfirmationStore())
 	result := gateway.Execute(context.Background(), testTrusted("message-1"), Call{
-		Name:      ToolEscalate,
-		Arguments: json.RawMessage(`{"reason":{"code":"customer_request","summary":"Please call me"}}`),
+		Name: ToolCancel,
+		Arguments: json.RawMessage(`{"booking_id":"66666666-6666-4666-8666-666666666666",` +
+			`"reason":"Plans changed","idempotency_key":"cancel-request-0001"}`),
 	})
 	if result.Error == nil || result.Error.Code != CodeNotImplemented {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestGatewayEscalatesUsingOnlyTrustedConversationIdentity(t *testing.T) {
+	backend := &fakeBackend{}
+	gateway := newTestGateway(t, backend, NewMemoryConfirmationStore())
+	trusted := testTrusted("message-1")
+	trusted.AgentRunID = "77777777-7777-4777-8777-777777777777"
+	call := Call{
+		ID: "escalation-call-1", Name: ToolEscalate,
+		Arguments: json.RawMessage(`{"reason":{"code":"customer_request","summary":"Please call me"}}`),
+	}
+	result := gateway.Execute(context.Background(), trusted, call)
+	if result.Status != StatusSuccess || len(backend.escalations) != 1 {
+		t.Fatalf("result=%#v escalations=%#v", result, backend.escalations)
+	}
+	command := backend.escalations[0]
+	if command.TenantID != testTenant || command.OwnerCustomerID != testCustomer ||
+		command.ConversationID != testConversation || command.AgentRunID != trusted.AgentRunID ||
+		command.ToolCallID != call.ID || command.ReasonCode != "customer_request" {
+		t.Fatalf("backend received untrusted escalation context: %#v", command)
 	}
 }

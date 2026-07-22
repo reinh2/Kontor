@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -122,7 +124,7 @@ func TestOpenRouterAdapterReturnsTypedHTTPError(t *testing.T) {
 	})
 
 	adapter, err := NewOpenRouterAdapter(OpenRouterConfig{
-		APIKey: "key", Model: "model", Endpoint: "https://openrouter.test", HTTPClient: recorderClient(handler),
+		APIKey: "key", Model: "model", Endpoint: "https://openrouter.test", HTTPClient: recorderClient(handler), MaxAttempts: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +139,270 @@ func TestOpenRouterAdapterReturnsTypedHTTPError(t *testing.T) {
 	if providerError.StatusCode != http.StatusServiceUnavailable || providerError.Code != "503" ||
 		providerError.RetryAfter != 7*time.Second || !providerError.Retryable() {
 		t.Fatalf("provider error = %#v", providerError)
+	}
+}
+
+func TestOpenRouterAdapterRetriesTransientTransportErrorsWithDefaultBound(t *testing.T) {
+	t.Parallel()
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, io.ErrUnexpectedEOF
+		}
+		return openRouterTestResponse(http.StatusOK, nil, openRouterSuccessBody(11)), nil
+	})}
+	var waits []time.Duration
+	adapter, err := NewOpenRouterAdapter(OpenRouterConfig{
+		APIKey: "key", Model: "model", Endpoint: "https://openrouter.test", HTTPClient: client,
+		RetryBaseDelay: 100 * time.Millisecond, RetryMaxDelay: time.Second,
+		RetryJitter: func(time.Duration) time.Duration { return 0 },
+		RetryWait: func(_ context.Context, delay time.Duration) error {
+			waits = append(waits, delay)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := adapter.Complete(context.Background(), Request{
+		Messages: []Message{{Role: RoleUser, Content: "hello"}}, MaxOutputTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != defaultOpenRouterAttempts {
+		t.Fatalf("attempts = %d, want default %d", attempts, defaultOpenRouterAttempts)
+	}
+	wantWaits := []time.Duration{50 * time.Millisecond, 100 * time.Millisecond}
+	if !reflect.DeepEqual(waits, wantWaits) {
+		t.Fatalf("waits = %v, want exponential waits %v", waits, wantWaits)
+	}
+	if response.Usage.Total() != 11 {
+		t.Fatalf("usage = %#v", response.Usage)
+	}
+	if !response.UsageIncomplete {
+		t.Fatal("transport retry without usage was not marked incomplete")
+	}
+}
+
+func TestOpenRouterAdapterRetriesOnlyConfiguredHTTPStatuses(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{
+		http.StatusRequestTimeout,
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+	} {
+		status := status
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+			attempts := 0
+			var waits []time.Duration
+			client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				attempts++
+				if attempts == 1 {
+					headers := http.Header{}
+					if status == http.StatusTooManyRequests {
+						headers.Set("Retry-After", "2")
+					}
+					return openRouterTestResponse(status, headers, `{"error":{"code":"retryable","message":"retry"}}`), nil
+				}
+				return openRouterTestResponse(http.StatusOK, nil, openRouterSuccessBody(13)), nil
+			})}
+			adapter, err := NewOpenRouterAdapter(OpenRouterConfig{
+				APIKey: "key", Model: "model", Endpoint: "https://openrouter.test", HTTPClient: client,
+				MaxAttempts: 2, RetryBaseDelay: 100 * time.Millisecond, RetryMaxDelay: time.Second,
+				RetryJitter: func(time.Duration) time.Duration { return 0 },
+				RetryWait: func(_ context.Context, delay time.Duration) error {
+					waits = append(waits, delay)
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := adapter.Complete(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "hello"}}, MaxOutputTokens: 10}); err != nil {
+				t.Fatal(err)
+			}
+			if attempts != 2 || len(waits) != 1 {
+				t.Fatalf("attempts=%d waits=%v", attempts, waits)
+			}
+			if status == http.StatusTooManyRequests && waits[0] != 2*time.Second {
+				t.Fatalf("Retry-After wait = %v, want 2s", waits[0])
+			}
+		})
+	}
+}
+
+func TestOpenRouterAdapterRetriesEmbeddedProviderErrorInHTTP200Choice(t *testing.T) {
+	t.Parallel()
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return openRouterTestResponse(http.StatusOK, nil, `{
+				"id":"failed-generation",
+				"choices":[{"finish_reason":"error","error":{"code":502,"message":"upstream provider failed"}}],
+				"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}
+			}`), nil
+		}
+		return openRouterTestResponse(http.StatusOK, nil, openRouterSuccessBody(11)), nil
+	})}
+	adapter, err := NewOpenRouterAdapter(OpenRouterConfig{
+		APIKey: "key", Model: "model", Endpoint: "https://openrouter.test", HTTPClient: client,
+		MaxAttempts: 2,
+		RetryJitter: func(time.Duration) time.Duration { return 0 },
+		RetryWait:   func(context.Context, time.Duration) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := adapter.Complete(context.Background(), Request{
+		Messages: []Message{{Role: RoleUser, Content: "hello"}}, MaxOutputTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 || response.Usage.Total() != 16 || response.UsageIncomplete {
+		t.Fatalf("attempts=%d response=%#v", attempts, response)
+	}
+}
+
+func TestOpenRouterAdapterDoesNotRetryNonRetryableClientError(t *testing.T) {
+	t.Parallel()
+	attempts := 0
+	waits := 0
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		attempts++
+		return openRouterTestResponse(http.StatusBadRequest, nil, `{"error":{"code":400,"message":"invalid request"}}`), nil
+	})}
+	adapter, err := NewOpenRouterAdapter(OpenRouterConfig{
+		APIKey: "key", Model: "model", Endpoint: "https://openrouter.test", HTTPClient: client,
+		RetryWait: func(context.Context, time.Duration) error { waits++; return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.Complete(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "hello"}}, MaxOutputTokens: 10})
+	var providerError *OpenRouterError
+	if !errors.As(err, &providerError) || providerError.StatusCode != http.StatusBadRequest {
+		t.Fatalf("error = %T %v", err, err)
+	}
+	if attempts != 1 || waits != 0 {
+		t.Fatalf("attempts=%d waits=%d, want 1/0", attempts, waits)
+	}
+}
+
+func TestOpenRouterAdapterDoesNotRetryPermanentTransportError(t *testing.T) {
+	t.Parallel()
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		attempts++
+		return nil, errors.New("permanent transport configuration error")
+	})}
+	adapter, err := NewOpenRouterAdapter(OpenRouterConfig{
+		APIKey: "key", Model: "model", Endpoint: "https://openrouter.test", HTTPClient: client,
+		RetryWait: func(context.Context, time.Duration) error {
+			t.Fatal("retry wait called for permanent transport error")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Complete(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "hello"}}, MaxOutputTokens: 10}); err == nil {
+		t.Fatal("Complete succeeded")
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestOpenRouterAdapterStopsAtConfiguredAttemptBound(t *testing.T) {
+	t.Parallel()
+	attempts := 0
+	waits := 0
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		attempts++
+		return nil, io.ErrUnexpectedEOF
+	})}
+	adapter, err := NewOpenRouterAdapter(OpenRouterConfig{
+		APIKey: "key", Model: "model", Endpoint: "https://openrouter.test", HTTPClient: client,
+		MaxAttempts: 2,
+		RetryJitter: func(time.Duration) time.Duration { return 0 },
+		RetryWait:   func(context.Context, time.Duration) error { waits++; return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Complete(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "hello"}}, MaxOutputTokens: 10}); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("error = %v, want unexpected EOF", err)
+	}
+	if attempts != 2 || waits != 1 {
+		t.Fatalf("attempts=%d waits=%d, want 2/1", attempts, waits)
+	}
+}
+
+func TestOpenRouterAdapterAccumulatesReportedUsageAcrossRetryAttempts(t *testing.T) {
+	t.Parallel()
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return openRouterTestResponse(http.StatusBadGateway, nil,
+				`{"error":{"code":502,"message":"provider disconnected"},"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`), nil
+		}
+		return openRouterTestResponse(http.StatusOK, nil, openRouterSuccessBody(11)), nil
+	})}
+	adapter, err := NewOpenRouterAdapter(OpenRouterConfig{
+		APIKey: "key", Model: "model", Endpoint: "https://openrouter.test", HTTPClient: client,
+		MaxAttempts: 2,
+		RetryJitter: func(time.Duration) time.Duration { return 0 },
+		RetryWait:   func(context.Context, time.Duration) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := adapter.Complete(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "hello"}}, MaxOutputTokens: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Usage.Total() != 16 || response.Usage.InputTokens != 10 || response.Usage.OutputTokens != 6 {
+		t.Fatalf("accumulated usage = %#v", response.Usage)
+	}
+	if response.UsageIncomplete {
+		t.Fatal("fully reported retry usage was marked incomplete")
+	}
+}
+
+func TestOpenRouterAdapterRetryWaitHonorsAdapterContext(t *testing.T) {
+	t.Parallel()
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		attempts++
+		return openRouterTestResponse(http.StatusServiceUnavailable, nil, `{"error":{"code":503,"message":"retry"}}`), nil
+	})}
+	waitCalled := false
+	adapter, err := NewOpenRouterAdapter(OpenRouterConfig{
+		APIKey: "key", Model: "model", Endpoint: "https://openrouter.test", HTTPClient: client,
+		Timeout: time.Second,
+		RetryWait: func(ctx context.Context, _ time.Duration) error {
+			waitCalled = true
+			if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+				t.Error("retry context has no adapter deadline")
+			}
+			return context.DeadlineExceeded
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.Complete(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "hello"}}, MaxOutputTokens: 10})
+	if !errors.Is(err, context.DeadlineExceeded) || attempts != 1 || !waitCalled {
+		t.Fatalf("error=%v attempts=%d waitCalled=%v", err, attempts, waitCalled)
 	}
 }
 
@@ -166,4 +432,21 @@ func recorderClient(handler http.Handler) *http.Client {
 		handler.ServeHTTP(recorder, request)
 		return recorder.Result(), nil
 	})}
+}
+
+func openRouterTestResponse(status int, headers http.Header, body string) *http.Response {
+	recorder := httptest.NewRecorder()
+	for name, values := range headers {
+		for _, value := range values {
+			recorder.Header().Add(name, value)
+		}
+	}
+	recorder.WriteHeader(status)
+	_, _ = recorder.WriteString(body)
+	return recorder.Result()
+}
+
+func openRouterSuccessBody(totalTokens int) string {
+	return `{"id":"gen-retry","model":"model","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":7,"completion_tokens":` +
+		strconv.Itoa(totalTokens-7) + `,"total_tokens":` + strconv.Itoa(totalTokens) + `}}`
 }

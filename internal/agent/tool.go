@@ -33,10 +33,11 @@ type ToolAttempt struct {
 // ToolExecution is the complete result of one parent model-requested call.
 // Content is sent back to the model as a tool message.
 type ToolExecution struct {
-	Content  json.RawMessage
-	IsError  bool
-	Status   ToolStatus
-	Attempts []ToolAttempt
+	Content             json.RawMessage
+	IsError             bool
+	Status              ToolStatus
+	Attempts            []ToolAttempt
+	SideEffectCommitted bool
 }
 
 // ToolExecutor is the sole capability boundary between model requests and

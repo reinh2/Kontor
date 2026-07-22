@@ -3,43 +3,70 @@ package llm
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 const (
 	defaultOpenRouterEndpoint = "https://openrouter.ai/api/v1/chat/completions"
 	defaultOpenRouterTimeout  = 20 * time.Second
+	defaultOpenRouterAttempts = 3
+	defaultRetryBaseDelay     = 200 * time.Millisecond
+	defaultRetryMaxDelay      = 4 * time.Second
+	maxOpenRouterAttempts     = 10
 	maxOpenRouterResponseSize = 4 << 20
 )
+
+// RetryJitterFunc returns jitter in [0,max]. It is injectable so retry timing
+// can be tested without randomness.
+type RetryJitterFunc func(max time.Duration) time.Duration
+
+// RetryWaitFunc waits for a retry or returns when ctx is done.
+type RetryWaitFunc func(ctx context.Context, delay time.Duration) error
 
 // OpenRouterConfig is supplied by the application configuration layer. The
 // adapter deliberately does not read environment variables itself.
 type OpenRouterConfig struct {
-	APIKey      string
-	Model       string
-	Endpoint    string
-	HTTPReferer string
-	AppTitle    string
-	Timeout     time.Duration
-	HTTPClient  *http.Client
+	APIKey         string
+	Model          string
+	Endpoint       string
+	HTTPReferer    string
+	AppTitle       string
+	Timeout        time.Duration
+	HTTPClient     *http.Client
+	MaxAttempts    int
+	RetryBaseDelay time.Duration
+	RetryMaxDelay  time.Duration
+	RetryJitter    RetryJitterFunc
+	RetryWait      RetryWaitFunc
+	Now            func() time.Time
 }
 
 // OpenRouterAdapter implements the normalized OpenRouter Chat Completions API.
 type OpenRouterAdapter struct {
-	apiKey      string
-	model       string
-	endpoint    string
-	httpReferer string
-	appTitle    string
-	timeout     time.Duration
-	client      *http.Client
+	apiKey         string
+	model          string
+	endpoint       string
+	httpReferer    string
+	appTitle       string
+	timeout        time.Duration
+	client         *http.Client
+	maxAttempts    int
+	retryBaseDelay time.Duration
+	retryMaxDelay  time.Duration
+	retryJitter    RetryJitterFunc
+	retryWait      RetryWaitFunc
+	now            func() time.Time
 }
 
 // NewOpenRouterAdapter validates config and constructs an adapter. API keys
@@ -64,15 +91,54 @@ func NewOpenRouterAdapter(config OpenRouterConfig) (*OpenRouterAdapter, error) {
 	if client == nil {
 		client = &http.Client{}
 	}
+	maxAttempts := config.MaxAttempts
+	if maxAttempts == 0 {
+		maxAttempts = defaultOpenRouterAttempts
+	}
+	if maxAttempts < 1 || maxAttempts > maxOpenRouterAttempts {
+		return nil, fmt.Errorf("openrouter: max attempts must be between 1 and %d", maxOpenRouterAttempts)
+	}
+	retryBaseDelay := config.RetryBaseDelay
+	if retryBaseDelay == 0 {
+		retryBaseDelay = defaultRetryBaseDelay
+	}
+	if retryBaseDelay < 0 {
+		return nil, errors.New("openrouter: retry base delay cannot be negative")
+	}
+	retryMaxDelay := config.RetryMaxDelay
+	if retryMaxDelay == 0 {
+		retryMaxDelay = defaultRetryMaxDelay
+	}
+	if retryMaxDelay < retryBaseDelay {
+		return nil, errors.New("openrouter: retry max delay must be at least the base delay")
+	}
+	retryJitter := config.RetryJitter
+	if retryJitter == nil {
+		retryJitter = cryptoRetryJitter
+	}
+	retryWait := config.RetryWait
+	if retryWait == nil {
+		retryWait = waitForRetry
+	}
+	now := config.Now
+	if now == nil {
+		now = time.Now
+	}
 
 	return &OpenRouterAdapter{
-		apiKey:      config.APIKey,
-		model:       config.Model,
-		endpoint:    endpoint,
-		httpReferer: config.HTTPReferer,
-		appTitle:    config.AppTitle,
-		timeout:     timeout,
-		client:      client,
+		apiKey:         strings.TrimSpace(config.APIKey),
+		model:          strings.TrimSpace(config.Model),
+		endpoint:       endpoint,
+		httpReferer:    config.HTTPReferer,
+		appTitle:       config.AppTitle,
+		timeout:        timeout,
+		client:         client,
+		maxAttempts:    maxAttempts,
+		retryBaseDelay: retryBaseDelay,
+		retryMaxDelay:  retryMaxDelay,
+		retryJitter:    retryJitter,
+		retryWait:      retryWait,
+		now:            now,
 	}, nil
 }
 
@@ -166,6 +232,7 @@ func (e *OpenRouterError) Error() string {
 func (e *OpenRouterError) Retryable() bool {
 	return e.StatusCode == http.StatusRequestTimeout ||
 		e.StatusCode == http.StatusTooManyRequests ||
+		e.StatusCode == http.StatusInternalServerError ||
 		e.StatusCode == http.StatusBadGateway ||
 		e.StatusCode == http.StatusServiceUnavailable ||
 		e.StatusCode == http.StatusGatewayTimeout
@@ -186,7 +253,34 @@ func (a *OpenRouterAdapter) Complete(ctx context.Context, request Request) (Resp
 
 	requestContext, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
-	httpRequest, err := http.NewRequestWithContext(requestContext, http.MethodPost, a.endpoint, bytes.NewReader(body))
+
+	var totalUsage Usage
+	usageIncomplete := false
+	for attempt := 1; attempt <= a.maxAttempts; attempt++ {
+		response, attemptErr := a.completeAttempt(requestContext, body)
+		if attemptErr != nil && response.Usage.Total() <= 0 {
+			usageIncomplete = true
+		}
+		addProviderUsage(&totalUsage, response.Usage)
+		response.Usage = totalUsage
+		response.UsageIncomplete = usageIncomplete
+		if attemptErr == nil {
+			return response, nil
+		}
+		if attempt == a.maxAttempts || !shouldRetryOpenRouter(requestContext, attemptErr) {
+			return response, attemptErr
+		}
+
+		delay := a.retryDelay(attempt, attemptErr)
+		if err := a.retryWait(requestContext, delay); err != nil {
+			return response, fmt.Errorf("openrouter: retry wait: %w", err)
+		}
+	}
+	return Response{Usage: totalUsage, UsageIncomplete: usageIncomplete}, errors.New("openrouter: retry loop ended unexpectedly")
+}
+
+func (a *OpenRouterAdapter) completeAttempt(ctx context.Context, body []byte) (Response, error) {
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, a.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return Response{}, fmt.Errorf("openrouter: create request: %w", err)
 	}
@@ -218,15 +312,15 @@ func (a *OpenRouterAdapter) Complete(ctx context.Context, request Request) (Resp
 	decodeErr := json.Unmarshal(responseBody, &wireResponse)
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
 		if decodeErr != nil {
-			return Response{}, newOpenRouterError(httpResponse, nil)
+			return Response{}, newOpenRouterError(httpResponse, nil, a.now())
 		}
-		return partialOpenRouterResponse(wireResponse), newOpenRouterError(httpResponse, wireResponse.Error)
+		return partialOpenRouterResponse(wireResponse), newOpenRouterError(httpResponse, wireResponse.Error, a.now())
 	}
 	if decodeErr != nil {
 		return Response{}, fmt.Errorf("openrouter: decode response: %w", decodeErr)
 	}
 	if wireResponse.Error != nil {
-		return partialOpenRouterResponse(wireResponse), newOpenRouterError(httpResponse, wireResponse.Error)
+		return partialOpenRouterResponse(wireResponse), newOpenRouterError(httpResponse, wireResponse.Error, a.now())
 	}
 	if len(wireResponse.Choices) == 0 {
 		return Response{}, errors.New("openrouter: response contains no choices")
@@ -234,7 +328,7 @@ func (a *OpenRouterAdapter) Complete(ctx context.Context, request Request) (Resp
 
 	choice := wireResponse.Choices[0]
 	if choice.Error != nil {
-		return partialOpenRouterResponse(wireResponse), newOpenRouterError(httpResponse, choice.Error)
+		return partialOpenRouterResponse(wireResponse), newOpenRouterError(httpResponse, choice.Error, a.now())
 	}
 	if choice.FinishReason == "error" {
 		return partialOpenRouterResponse(wireResponse), &OpenRouterError{StatusCode: httpResponse.StatusCode, Message: "provider returned an error finish reason"}
@@ -256,6 +350,97 @@ func (a *OpenRouterAdapter) Complete(ctx context.Context, request Request) (Resp
 	}, nil
 }
 
+func (a *OpenRouterAdapter) retryDelay(failedAttempt int, err error) time.Duration {
+	backoff := a.retryBaseDelay
+	for step := 1; step < failedAttempt && backoff < a.retryMaxDelay; step++ {
+		if backoff > a.retryMaxDelay/2 {
+			backoff = a.retryMaxDelay
+			break
+		}
+		backoff *= 2
+	}
+	if backoff > a.retryMaxDelay {
+		backoff = a.retryMaxDelay
+	}
+
+	half := backoff / 2
+	jitterWindow := backoff - half
+	jitter := a.retryJitter(jitterWindow)
+	if jitter < 0 {
+		jitter = 0
+	}
+	if jitter > jitterWindow {
+		jitter = jitterWindow
+	}
+	delay := half + jitter
+
+	var providerError *OpenRouterError
+	if errors.As(err, &providerError) && providerError.RetryAfter > delay {
+		delay = providerError.RetryAfter
+	}
+	return delay
+}
+
+func shouldRetryOpenRouter(ctx context.Context, err error) bool {
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var providerError *OpenRouterError
+	if errors.As(err, &providerError) {
+		switch providerError.StatusCode {
+		case http.StatusRequestTimeout, http.StatusTooManyRequests,
+			http.StatusInternalServerError, http.StatusBadGateway,
+			http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return true
+		default:
+			return false
+		}
+	}
+	return isTransientTransportError(err)
+}
+
+func isTransientTransportError(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ETIMEDOUT) ||
+		errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) {
+		return true
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary())
+}
+
+func addProviderUsage(total *Usage, usage Usage) {
+	total.InputTokens += usage.InputTokens
+	total.OutputTokens += usage.OutputTokens
+	total.TotalTokens += usage.Total()
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func cryptoRetryJitter(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+	var random [8]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return max / 2
+	}
+	return time.Duration(binary.LittleEndian.Uint64(random[:]) % uint64(max+1))
+}
+
 func partialOpenRouterResponse(wire openRouterResponse) Response {
 	return Response{
 		ID:    wire.ID,
@@ -269,6 +454,15 @@ func partialOpenRouterResponse(wire openRouterResponse) Response {
 }
 
 func (a *OpenRouterAdapter) toOpenRouterRequest(request Request) (openRouterRequest, error) {
+	switch request.ToolChoice {
+	case "", ToolChoiceAuto:
+	case ToolChoiceRequired:
+		if len(request.Tools) == 0 {
+			return openRouterRequest{}, errors.New("openrouter: required tool choice needs at least one tool")
+		}
+	default:
+		return openRouterRequest{}, fmt.Errorf("openrouter: unsupported tool choice %q", request.ToolChoice)
+	}
 	wire := openRouterRequest{
 		Model:               a.model,
 		Messages:            make([]openRouterMessage, len(request.Messages)),
@@ -283,7 +477,10 @@ func (a *OpenRouterAdapter) toOpenRouterRequest(request Request) (openRouterRequ
 		wire.Messages[i] = converted
 	}
 	if len(request.Tools) > 0 {
-		wire.ToolChoice = "auto"
+		wire.ToolChoice = string(request.ToolChoice)
+		if wire.ToolChoice == "" {
+			wire.ToolChoice = string(ToolChoiceAuto)
+		}
 		wire.Tools = make([]openRouterTool, len(request.Tools))
 		for i, tool := range request.Tools {
 			if strings.TrimSpace(tool.Name) == "" {
@@ -397,11 +594,19 @@ func decodeNullableString(raw json.RawMessage) (string, error) {
 	return value, nil
 }
 
-func newOpenRouterError(response *http.Response, providerError *openRouterAPIError) *OpenRouterError {
+func newOpenRouterError(response *http.Response, providerError *openRouterAPIError, now time.Time) *OpenRouterError {
 	result := &OpenRouterError{StatusCode: response.StatusCode}
 	if providerError != nil {
 		result.Code = strings.Trim(string(providerError.Code), `"`)
 		result.Message = strings.TrimSpace(providerError.Message)
+		// OpenRouter can report a non-streaming upstream-provider failure inside
+		// an otherwise successful HTTP 200 response. In that shape the embedded
+		// numeric error code, not the transport status, controls retry policy.
+		if response.StatusCode >= 200 && response.StatusCode < 300 {
+			if embeddedStatus, ok := embeddedOpenRouterStatus(providerError.Code); ok {
+				result.StatusCode = embeddedStatus
+			}
+		}
 	}
 	if result.Message == "" {
 		result.Message = http.StatusText(response.StatusCode)
@@ -409,7 +614,25 @@ func newOpenRouterError(response *http.Response, providerError *openRouterAPIErr
 	if retryAfter := strings.TrimSpace(response.Header.Get("Retry-After")); retryAfter != "" {
 		if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
 			result.RetryAfter = time.Duration(seconds) * time.Second
+		} else if retryAt, err := http.ParseTime(retryAfter); err == nil && retryAt.After(now) {
+			result.RetryAfter = retryAt.Sub(now)
 		}
 	}
 	return result
+}
+
+func embeddedOpenRouterStatus(raw json.RawMessage) (int, bool) {
+	if len(raw) == 0 {
+		return 0, false
+	}
+	var numeric int
+	if err := json.Unmarshal(raw, &numeric); err == nil && numeric >= 400 && numeric <= 599 {
+		return numeric, true
+	}
+	var textCode string
+	if err := json.Unmarshal(raw, &textCode); err != nil {
+		return 0, false
+	}
+	numeric, err := strconv.Atoi(strings.TrimSpace(textCode))
+	return numeric, err == nil && numeric >= 400 && numeric <= 599
 }

@@ -1,0 +1,181 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stage-1:
+    name: Stage 1 verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: kontor
+          POSTGRES_USER: kontor
+          POSTGRES_PASSWORD: kontor
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kontor -d kontor"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      TEST_DATABASE_URL: postgres://kontor:kontor@127.0.0.1:5432/kontor?sslmode=disable
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with race detector
+        run: go test -race -count=1 ./...
+
+      - name: Build API image
+        run: docker build --build-arg TARGET=api --tag kontor-api:ci .
+
+      - name: Build worker image
+        run: docker build --build-arg TARGET=worker --tag kontor-worker:ci .
+
+      - name: Run authenticated Compose smoke
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if (( status != 0 )); then
+              docker compose ps --all || true
+              docker compose logs --no-color || true
+            fi
+            docker compose down --volumes --remove-orphans || true
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          docker compose up --detach --build
+
+          ready=0
+          for attempt in {1..60}; do
+            if curl --fail --silent --show-error http://127.0.0.1:8080/readyz >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if (( ready == 0 )); then
+            echo "Kontor did not become ready within 120 seconds" >&2
+            exit 1
+          fi
+
+          created="$(curl --fail --silent --show-error \
+              --request POST \
+              --header 'Content-Type: application/json' \
+              --data '{"display_name":"CI Customer","email":"ci@example.com"}' \
+              http://127.0.0.1:8080/api/v1/demo/conversations)"
+          conversation_id="$(jq --exit-status --raw-output \
+            '.conversation_id | select(type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"))' \
+            <<<"$created")"
+          capability_token="$(jq --exit-status --raw-output \
+            '.capability_token | select(type == "string" and length > 0)' \
+            <<<"$created")"
+
+          proposal="$(curl --fail --silent --show-error \
+              --request POST \
+              --header 'Content-Type: application/json' \
+              --header "Authorization: Bearer ${capability_token}" \
+              --data '{"client_message_id":"ci-proposal-0001","text":"Book a haircut Thursday evening"}' \
+              "http://127.0.0.1:8080/api/v1/demo/conversations/${conversation_id}/messages")"
+          jq --exit-status \
+            '.outcome == "completed" and
+             (.pending_confirmation.id | type == "string" and length > 0) and
+             any(.pending_confirmation.facts[];
+               .label == "Customer" and .value == "CI Customer")' \
+            <<<"$proposal" >/dev/null
+          proposal_run_id="$(jq --exit-status --raw-output \
+            '.run_id | select(type == "string" and length > 0)' \
+            <<<"$proposal")"
+
+          bookings_before="$(docker compose exec -T postgres \
+            psql --username kontor --dbname kontor --tuples-only --no-align \
+            --command "SELECT count(*) FROM bookings WHERE conversation_id = '${conversation_id}'::uuid;")"
+          if [[ "$bookings_before" != "0" ]]; then
+            echo "Expected no booking before confirmation; found ${bookings_before}" >&2
+            exit 1
+          fi
+
+          proposal_trace="$(curl --fail --silent --show-error \
+              --header "Authorization: Bearer ${capability_token}" \
+              "http://127.0.0.1:8080/api/v1/demo/runs/${proposal_run_id}")"
+          jq --exit-status '
+            [.tools[] | select(.iteration == 1)] as $first
+            | ($first | length == 2)
+              and ($first[0].call_index == 1)
+              and ($first[0].call_count == 2)
+              and ($first[0].name == "list_services")
+              and ($first[0].attempts | length == 1)
+              and ($first[0].attempts[0].attempt_no == 1)
+              and ($first[1].call_index == 2)
+              and ($first[1].call_count == 2)
+              and ($first[1].name == "list_staff")
+              and ($first[1].attempts | length == 1)
+              and ($first[1].attempts[0].attempt_no == 1)
+          ' <<<"$proposal_trace" >/dev/null
+
+          confirmation="$(curl --fail --silent --show-error \
+              --request POST \
+              --header 'Content-Type: application/json' \
+              --header "Authorization: Bearer ${capability_token}" \
+              --data '{"client_message_id":"ci-confirmation-0002","text":"Yes, confirm"}' \
+              "http://127.0.0.1:8080/api/v1/demo/conversations/${conversation_id}/messages")"
+          jq --exit-status \
+            '.outcome == "completed" and
+             (.pending_confirmation == null) and
+             (.message | ascii_downcase | contains("booked"))' \
+            <<<"$confirmation" >/dev/null
+          confirmation_run_id="$(jq --exit-status --raw-output \
+            '.run_id | select(type == "string" and length > 0)' \
+            <<<"$confirmation")"
+
+          confirmation_trace="$(curl --fail --silent --show-error \
+              --header "Authorization: Bearer ${capability_token}" \
+              "http://127.0.0.1:8080/api/v1/demo/runs/${confirmation_run_id}")"
+          jq --exit-status '
+            .status == "completed"
+            and any(
+              .tools[];
+              .name == "create_booking"
+              and .status == "succeeded"
+              and (.attempts | length == 1)
+              and .attempts[0].attempt_no == 1
+            )
+          ' <<<"$confirmation_trace" >/dev/null
+
+          bookings_after="$(docker compose exec -T postgres \
+            psql --username kontor --dbname kontor --tuples-only --no-align \
+            --command "SELECT count(*) FROM bookings WHERE conversation_id = '${conversation_id}'::uuid;")"
+          if [[ "$bookings_after" != "1" ]]; then
+            echo "Expected exactly one booking after confirmation; found ${bookings_after}" >&2
+            exit 1
+          fi

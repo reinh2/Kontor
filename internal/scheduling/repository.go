@@ -276,6 +276,16 @@ func (r *PGXRepository) createBookingOnce(ctx context.Context, request CreateBoo
 	if err := r.acquireScheduleLocks(ctx, tx, request.StaffID, lockDates); err != nil {
 		return CreateBookingResult{}, err
 	}
+	// Recheck against the database wall clock after any lock wait. The early
+	// application-clock check rejects obvious stale calls cheaply; this one
+	// prevents a near-boundary request from becoming past while queued.
+	var stillFuture bool
+	if err := tx.QueryRow(ctx, `SELECT $1::timestamptz > clock_timestamp()`, request.StartsAt).Scan(&stillFuture); err != nil {
+		return CreateBookingResult{}, fmt.Errorf("recheck booking start time: %w", err)
+	}
+	if !stillFuture {
+		return CreateBookingResult{}, ErrSlotUnavailable
+	}
 	rules, err := loadRules(ctx, tx, r.tenantID, member.ID)
 	if err != nil {
 		return CreateBookingResult{}, err
@@ -551,8 +561,15 @@ func loadBooking(ctx context.Context, db queryer, tenantID, bookingID string) (B
 }
 
 func validateCreateBooking(request CreateBookingRequest) error {
+	return validateCreateBookingAt(request, time.Now())
+}
+
+func validateCreateBookingAt(request CreateBookingRequest, now time.Time) error {
 	if request.CustomerID == "" || request.ServiceID == "" || request.StaffID == "" || request.StartsAt.IsZero() {
 		return fmt.Errorf("%w: customer, service, staff, and start are required", ErrInvalidInput)
+	}
+	if !request.StartsAt.After(now) {
+		return fmt.Errorf("%w: booking start must be in the future", ErrSlotUnavailable)
 	}
 	if length := len(request.IdempotencyKey); length < 16 || length > 128 {
 		return fmt.Errorf("%w: idempotency key length must be 16..128", ErrInvalidInput)

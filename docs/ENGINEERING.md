@@ -8,14 +8,20 @@ The implemented path is:
 
 1. Create a demo customer and conversation.
 2. Save the inbound message before doing model or tool work.
-3. Run a bounded model/tool loop using either the deterministic demo adapter or OpenRouter Chat Completions.
+3. Run a bounded model/tool loop using either the deterministic demo adapter or the real OpenRouter Chat Completions adapter, including bounded retries for transient provider failures.
 4. Resolve trusted tenant, customer, conversation, message, and capability data from PostgreSQL for every tool execution.
 5. List services and staff, calculate slots, and mint a short-lived slot token scoped to the tenant and conversation.
 6. Persist a frozen booking proposal. Only a later, unambiguous customer message can authorize it.
 7. Recheck the slot under a database lock and create the booking and its first event atomically.
-8. Persist the assistant reply and close the agent run, or create an escalation record for bounded-run failures.
+8. Persist the assistant reply and close the agent run, execute a requested `escalate_to_human` hand-off, or write a safe fallback plus escalation and dead-letter event for provider or bounded-loop failures.
 
-The tool contract also names rescheduling, cancellation, CRM contact/deal, and human escalation. The gateway deliberately returns `NOT_IMPLEMENTED` for those calls in Stage 1. There are no CRM, notification, external-calendar, Telegram, or browser-client adapters in this repository.
+The tool contract also names rescheduling, cancellation, and CRM contact/deal operations. The gateway deliberately returns `NOT_IMPLEMENTED` for those calls in Stage 1; `escalate_to_human` is implemented and durably marks the conversation for human follow-up. There are no CRM, notification, external-calendar, Telegram, or browser-client adapters in this repository.
+
+## Stage scope decision
+
+The schema retains `tenant_id` in business primary and foreign keys, but the executable is deliberately scoped to one fixed tenant resolved from configuration. There is no tenant-selection path, provisioning API, onboarding flow, or tenant-management UI in this build.
+
+The Stage 1 forward migration is limited to data used now that also carries into planned Stages 2–3: catalogue and schedule data, customers and conversations, bookings, confirmation proposals, agent traces, escalations, dead letters, locks, and idempotency records. Channel delivery and reminder/outbox tables will arrive with their implementing stages; the schema does not speculate with later CRM, billing, identity, tenant-administration, or dashboard-projection tables.
 
 ## Package map
 
@@ -46,16 +52,20 @@ The tool contract also names rescheduling, cancellation, CRM contact/deal, and h
 4. Settles the reservation against provider-reported usage; a failed or usage-less call keeps the full reservation charged.
 5. Records the model iteration.
 6. Validates the returned assistant role and normalizes missing tool-call IDs.
-7. Executes every returned tool call sequentially in response order, appending every result before the next model request.
+7. Handles every returned tool call sequentially in response order, appending every result before the next model request. A refusal or successful human hand-off terminates execution of that batch; later siblings receive persisted `SKIPPED_AFTER_HANDOFF` results and cannot mutate state.
 8. Stops when the assistant returns no tool calls, or when an iteration, time, or token limit is reached.
 
-Sequential execution is intentional even though OpenRouter is told that parallel tool calls are permitted: it produces deterministic traces and prevents sibling writes from racing through the same turn.
+One model response may contain multiple tool calls. The runner handles that case explicitly: it processes every call sequentially in the order returned, persists its result, appends all results to history, and only then makes the next model request. Sequential execution is intentional even though OpenRouter is told that parallel tool calls are permitted; it produces deterministic traces and prevents sibling writes from racing through the same turn. A refused tool or successful `escalate_to_human` is terminal: remaining siblings are traced as refused with zero attempts and are not dispatched.
+
+The token cap belongs to the conversation rather than to an individual turn. `token_budget`, `tokens_used`, and `tokens_reserved` are persisted on the conversation row. Before a provider call, an atomic update reserves a conservative request-plus-maximum-response estimate for the provider's worst-case retry count only if `tokens_used + tokens_reserved + estimate` remains within the cap. Settlement moves aggregate reported usage into `tokens_used`; a failed or usage-less provider call is charged the full reservation. Concurrent turns and internal OpenRouter retries therefore cannot collectively spend past the hard cap.
 
 ## Tool boundary and authorization
 
 The gateway compiles the tool schemas at startup and rejects unknown tools, malformed JSON, extra properties, injected identity fields, missing capabilities, and invalid formats before dispatch.
 
-Model arguments never carry trusted ownership. `agenttools.Executor` looks up the run and its conversation to construct `tools.TrustedContext`; the gateway then uses that context for capability checks and scope validation. Slot tokens are HMAC-signed and bind tenant, conversation, service, staff, start/end time, timezone, and expiration.
+Model arguments never carry trusted ownership or customer profile data. `agenttools.Executor` joins the run, conversation, and customer to construct `tools.TrustedContext`; the gateway then uses that persisted identity for capability checks, confirmation facts, and booking commands, overriding any model-authored customer object. Slot tokens are HMAC-signed and bind tenant, conversation, service, staff, start/end time, timezone, and expiration.
+
+`escalate_to_human` passes through the same schema and capability boundary. Its backend creates an idempotent escalation associated with the run and source tool call and marks the conversation escalated. The runner treats that successful hand-off as terminal, skips later sibling calls, and closes the run with an escalated outcome.
 
 ### Two-phase confirmation
 
@@ -67,13 +77,15 @@ The application recognizes only whole-message consent such as `yes`, `confirm`, 
 
 The pure scheduling engine works in each staff member’s IANA time zone. It merges recurring working windows, subtracts recurring breaks, expands service and existing-booking buffers, uses half-open intervals, and produces a stable 15-minute grid. Tests cover both Europe/Berlin daylight-saving transitions, including the repeated autumn hour.
 
+The gateway rejects slot searches earlier than the 15-minute minimum lead time, later than the 365-day booking horizon, or wider than 31 days. It applies the same lead and horizon window before signing returned slots and again when consuming a slot token. The repository additionally compares the requested start with PostgreSQL's `clock_timestamp()` inside the booking transaction, preventing a request delayed around a boundary from creating an already-past booking.
+
 Slot search is advisory: the returned token is not a hold. `CreateBooking` starts a serializable transaction, reserves the idempotency key, materializes and locks the `(tenant, staff, local date)` schedule row, reloads busy state, and runs the same availability test again. A PostgreSQL GiST exclusion constraint on the buffered occupied range is the final double-booking guard.
 
 Transaction serialization/deadlock failures are retried up to 3 times with short backoff. A repeated idempotency key with identical owner-bound arguments replays the stored booking; different arguments produce an idempotency conflict.
 
 ## Persistence and trace shape
 
-The single forward migration carries `tenant_id` through business primary and foreign keys even though the application exposes one fixed tenant. This keeps tenant isolation explicit without claiming that tenant onboarding or runtime multi-tenancy exists.
+The deliberately small Stage 1 forward migration carries `tenant_id` through business primary and foreign keys even though the application exposes one fixed tenant. This keeps tenant isolation explicit without claiming that tenant onboarding or runtime multi-tenancy exists; later Stage 2–3 migrations will add only the tables their runtime work needs.
 
 Agent observability is stored as a hierarchy:
 
@@ -84,7 +96,9 @@ agent_run
         └── tool_execution_attempt (1..N)
 ```
 
-Run rows capture status, provider, model, token totals, duration, and a sanitized failure. Tool executions retain the model arguments, normalized result, duration, and child attempts. `GET /api/v1/demo/runs/{runID}` returns this persisted shape. There is no dashboard aggregation query yet.
+Run rows capture status, provider, model, token totals, duration, and a sanitized failure. There is exactly one `tool_executions` parent row per model-emitted call. Each execution attempt is a child `tool_execution_attempts` row whose `attempt_no` starts at 1 and increases under that same parent, so a retry does not become a second sibling call. `GET /api/v1/demo/runs/{runID}` returns this nested shape, matching the expandable attempt treatment in `design/screens/Kontor Agent Trace.dc.html`. There is no dashboard aggregation query yet.
+
+Inbound messages are saved before the agent starts. If the provider or bounded loop fails afterward, the service persists a safe assistant fallback, an escalation, the failed run status, and a pending `dead_letter_events` row with sanitized context for later inspection or replay. A policy-refused tool also creates a durable escalation; it does not disappear as a model-only message.
 
 ## Defaults and hard limits
 
@@ -94,26 +108,33 @@ Run rows capture status, provider, model, token totals, duration, and a sanitize
 | Whole-turn timeout | 25 s | Deadline across model and tool work |
 | Tool attempts | 3 | Maximum for retryable failures |
 | Per-attempt tool timeout | 5 s | Deadline around one gateway call |
+| OpenRouter attempts | 3 | Maximum requests for transient transport and 408/429/500/502/503/504 failures, including embedded provider errors returned inside HTTP 200 |
+| OpenRouter deadline | turn remainder (25 s maximum by default) | One deadline shared by the initial request, retry waits, and retries |
 | Conversation token budget | 50,000 | Persistent hard cap, including concurrent reservations |
 | Maximum model output | 800 tokens | Per-completion allowance |
 | OpenRouter response body | 4 MiB | Read limit before decoding |
+| Minimum booking lead | 15 min | Enforced during search, token issue/consume, and booking |
+| Maximum booking horizon | 365 days | Upper bound for offered and consumed appointments |
 | Slot-token lifetime | 5 min | Limits reuse of an offered slot |
 | Confirmation lifetime | 10 min ceiling | Also capped by the associated slot-token expiry |
 | Slot-search range | 31 days | Gateway and engine bound |
+| Graceful shutdown | 35 s | Validated to exceed the whole-turn timeout by at least 5 s |
 
-All application defaults can be inspected in [`.env.example`](../.env.example). Demo credentials and `SLOT_TOKEN_SECRET` are local-only values.
+Environment-configurable defaults can be inspected in [`.env.example`](../.env.example). The OpenRouter retry and scheduling-window values above are currently code-level safety defaults. Demo credentials and `SLOT_TOKEN_SECRET` are local-only values.
 
 ## HTTP API
 
 The Stage 1 handler exposes:
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/healthz` | Process liveness |
-| `GET` | `/readyz` | PostgreSQL readiness |
-| `POST` | `/api/v1/demo/conversations` | Create a demo customer and conversation |
-| `POST` | `/api/v1/demo/conversations/{conversationID}/messages` | Persist a customer message and run one agent turn |
-| `GET` | `/api/v1/demo/runs/{runID}` | Read the persisted run and nested tool trace |
+| Method | Path | Authorization | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/healthz` | None | Process liveness |
+| `GET` | `/readyz` | None | PostgreSQL readiness |
+| `POST` | `/api/v1/demo/conversations` | None | Create a demo customer and conversation; return its bearer capability once |
+| `POST` | `/api/v1/demo/conversations/{conversationID}/messages` | Conversation bearer | Persist a customer message and run one agent turn |
+| `GET` | `/api/v1/demo/runs/{runID}` | Owning conversation bearer | Read the persisted run and nested tool trace |
+
+The creation response contains an opaque `capability_token` and is marked `Cache-Control: no-store`. Only a SHA-256 digest is persisted; the raw value cannot be recovered after that response. Supply it as `Authorization: Bearer <capability_token>` to send messages or read a trace, and a token for one conversation cannot authorize another. This is a narrowly scoped demo capability, not a user identity or tenant authentication system.
 
 Request JSON rejects unknown fields and bodies larger than 16 KiB. Customer messages are limited separately by the application service (4,000 bytes by default). Errors use `application/problem+json`.
 
@@ -121,13 +142,13 @@ Request JSON rejects unknown fields and bodies larger than 16 KiB. Customer mess
 
 The zero-key adapter is deterministic and network-free. It drives the next-Thursday-evening haircut path, deliberately emits two discovery tools in one model response, proposes a booking from a signed slot, waits for confirmation, and then repeats the exact call with server authorization.
 
-The OpenRouter adapter uses non-streaming Chat Completions, supports tool calls and multiple calls per response, requests provider parallel-tool-call support, applies a request timeout, limits response size, and sanitizes provider errors. Provider selection and credentials come from application configuration, not from the adapter itself.
+The OpenRouter adapter is wired into the Stage 1 bootstrap, rather than deferred to a later product stage. It uses non-streaming Chat Completions, sends the exact JSON Schema tool definitions, supports multiple calls per response, requests provider parallel-tool-call support, applies a request timeout, limits response size, and sanitizes provider errors. It retries transient transport failures and 408/429/500/502/503/504 responses—including OpenRouter's non-streaming HTTP-200 response shape with an embedded provider error—up to three total attempts with capped exponential jitter, honoring `Retry-After`; all attempts share the adapter deadline. Reported usage across attempts is accumulated for conversation-budget settlement. Provider selection and credentials come from application configuration, not from the adapter itself.
 
 ## Tests
 
-At the time this document was written, the repository contains **47 named Go test functions across 12 test files**. The default suite covers the agent bounds, concurrent token reservations, schema and identity rejection, signed token scope, confirmation binding, OpenRouter serialization/errors, timezone and DST behavior, and scheduling adapter behavior.
+The default suite covers agent bounds, multi-call ordering, nested one-based attempts, concurrent token reservations, schema and identity rejection, signed token scope, confirmation binding, OpenRouter serialization/retries/errors, timezone and DST behavior, scheduling consistency, bearer-capability isolation, durable escalation, and provider-failure dead letters.
 
-Two PostgreSQL repository tests exercise idempotent booking, trace nesting, and concurrent booking contention when `TEST_DATABASE_URL` is set; otherwise they skip. Run the suites with:
+PostgreSQL-backed tests exercise the complete save/propose/confirm/book flow, idempotent booking, trace nesting, conversation serialization, capability isolation, durable failures, and concurrent booking contention when `TEST_DATABASE_URL` is set; otherwise they skip. Run the suites with:
 
 ```sh
 make test

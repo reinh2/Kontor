@@ -22,6 +22,8 @@ import (
 	"github.com/reinhlord/kontor/internal/tools"
 )
 
+const stage1OpenRouterAttempts = 3
+
 type Components struct {
 	Application   *app.Service
 	Conversations *conversations.Store
@@ -59,6 +61,9 @@ func Build(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, logger *s
 	}, agent.Dependencies{
 		Model: model, ToolExecutor: executor, Trace: traceStore,
 		Budget: agentbudget.NewPostgreSQL(conversationStore, cfg.Tenant.ID),
+		TokenEstimator: agent.ConservativeTokenEstimator{
+			ProviderAttempts: providerAttemptLimit(cfg.LLM.Provider),
+		},
 	}, modelToolDefinitions())
 	if err != nil {
 		return nil, fmt.Errorf("build agent runner: %w", err)
@@ -66,6 +71,7 @@ func Build(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, logger *s
 	application, err := app.New(app.Config{
 		TenantID: cfg.Tenant.ID, TenantName: cfg.Tenant.Name, TenantTimezone: cfg.Tenant.Timezone,
 		Provider: cfg.LLM.Provider, Model: modelName, TokenBudget: int(cfg.Agent.ConversationTokenBudget),
+		TurnTimeout: cfg.Agent.TurnTimeout,
 	}, pool, conversationStore, runner, traceStore, confirmationStore)
 	if err != nil {
 		return nil, err
@@ -91,9 +97,16 @@ func modelAdapter(cfg config.Config) (llm.Adapter, string, error) {
 	adapter, err := llm.NewOpenRouterAdapter(llm.OpenRouterConfig{
 		APIKey: cfg.LLM.OpenRouterKey, Model: cfg.LLM.OpenRouterModel, Endpoint: endpoint,
 		HTTPReferer: cfg.LLM.AppURL, AppTitle: cfg.LLM.AppTitle,
-		Timeout: cfg.Agent.TurnTimeout,
+		Timeout: cfg.Agent.TurnTimeout, MaxAttempts: stage1OpenRouterAttempts,
 	})
 	return adapter, cfg.LLM.OpenRouterModel, err
+}
+
+func providerAttemptLimit(provider string) int {
+	if provider == "openrouter" {
+		return stage1OpenRouterAttempts
+	}
+	return 1
 }
 
 func modelToolDefinitions() []llm.ToolDefinition {

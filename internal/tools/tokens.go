@@ -64,7 +64,7 @@ func (s *SlotSigner) Sign(claims SlotClaims) (string, error) {
 
 func (s *SlotSigner) Verify(token string, trusted TrustedContext, now time.Time) (SlotClaims, error) {
 	var claims SlotClaims
-	if len(token) > 600 || !strings.HasPrefix(token, "slt_v1_") {
+	if len(token) > 1024 || !strings.HasPrefix(token, "slt_v1_") {
 		return claims, ErrInvalidSlotToken
 	}
 	parts := strings.Split(strings.TrimPrefix(token, "slt_v1_"), ".")

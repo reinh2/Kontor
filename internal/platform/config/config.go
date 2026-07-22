@@ -81,11 +81,14 @@ func Load() (Config, error) {
 			AppTitle:        env("OPENROUTER_APP_TITLE", "Kontor"),
 		},
 		SlotTokenSecret: env("SLOT_TOKEN_SECRET", "demo-only-change-me-32-bytes-minimum"),
-		ShutdownTimeout: envDuration("SHUTDOWN_TIMEOUT", 15*time.Second),
+		ShutdownTimeout: envDuration("SHUTDOWN_TIMEOUT", 35*time.Second),
 	}
 
 	if cfg.DatabaseURL == "" {
 		return Config{}, errors.New("DATABASE_URL is required")
+	}
+	if cfg.Tenant.ID != DefaultTenantID {
+		return Config{}, fmt.Errorf("FIXED_TENANT_ID is fixed to %s in the single-tenant build", DefaultTenantID)
 	}
 	if cfg.Agent.MaxIterations < 1 || cfg.Agent.MaxIterations > 32 {
 		return Config{}, fmt.Errorf("AGENT_MAX_ITERATIONS must be between 1 and 32")
@@ -98,6 +101,12 @@ func Load() (Config, error) {
 	}
 	if cfg.Agent.MaxOutputTokens < 1 {
 		return Config{}, errors.New("AGENT_MAX_OUTPUT_TOKENS must be positive")
+	}
+	if cfg.Agent.TurnTimeout <= 0 {
+		return Config{}, errors.New("AGENT_TURN_TIMEOUT must be positive")
+	}
+	if cfg.ShutdownTimeout < cfg.Agent.TurnTimeout+5*time.Second {
+		return Config{}, errors.New("SHUTDOWN_TIMEOUT must be at least AGENT_TURN_TIMEOUT plus 5s")
 	}
 	if len(cfg.SlotTokenSecret) < 32 {
 		return Config{}, errors.New("SLOT_TOKEN_SECRET must contain at least 32 bytes")

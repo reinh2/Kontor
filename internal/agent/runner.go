@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/reinhlord/kontor/internal/llm"
+	"github.com/reinhlord/kontor/internal/tools"
 )
 
 const (
@@ -19,8 +21,9 @@ const (
 )
 
 var (
-	ErrIterationLimit = errors.New("agent: iteration limit reached")
-	ErrTurnTimeout    = errors.New("agent: turn deadline exceeded")
+	ErrIterationLimit   = errors.New("agent: iteration limit reached")
+	ErrTurnTimeout      = errors.New("agent: turn deadline exceeded")
+	ErrTerminalProtocol = errors.New("agent: terminal response protocol violated")
 )
 
 // Config contains hard safety limits for the agent loop.
@@ -57,7 +60,7 @@ type Runner struct {
 
 // NewRunner validates the tool registry and installs safe defaults for traces,
 // token estimation, and the in-memory per-conversation hard budget.
-func NewRunner(config Config, dependencies Dependencies, tools []llm.ToolDefinition) (*Runner, error) {
+func NewRunner(config Config, dependencies Dependencies, toolDefinitions []llm.ToolDefinition) (*Runner, error) {
 	if config.MaxIterations <= 0 {
 		return nil, errors.New("agent: max iterations must be positive")
 	}
@@ -87,10 +90,10 @@ func NewRunner(config Config, dependencies Dependencies, tools []llm.ToolDefinit
 		dependencies.Budget = budget
 	}
 
-	allowed := make(map[string]struct{}, len(tools))
-	toolVersions := make(map[string]string, len(tools))
-	toolCopy := make([]llm.ToolDefinition, len(tools))
-	for i, tool := range tools {
+	allowed := make(map[string]struct{}, len(toolDefinitions))
+	toolVersions := make(map[string]string, len(toolDefinitions))
+	toolCopy := make([]llm.ToolDefinition, len(toolDefinitions))
+	for i, tool := range toolDefinitions {
 		if tool.Name == "" {
 			return nil, fmt.Errorf("agent: tool %d has no name", i)
 		}
@@ -113,6 +116,9 @@ func NewRunner(config Config, dependencies Dependencies, tools []llm.ToolDefinit
 		toolVersions[tool.Name] = tool.Version
 		toolCopy[i] = tool
 		toolCopy[i].Parameters = append(json.RawMessage(nil), tool.Parameters...)
+	}
+	if _, exists := allowed[tools.ToolRespondToCustomer]; !exists {
+		return nil, fmt.Errorf("agent: required terminal tool %q is not registered", tools.ToolRespondToCustomer)
 	}
 
 	return &Runner{
@@ -143,6 +149,19 @@ type TurnResult struct {
 	Messages   []llm.Message
 	Iterations int
 	Usage      llm.Usage
+	// ToolRefused is sticky for the whole turn so the application can create a
+	// durable human escalation even if the model later emits a normal reply.
+	ToolRefused    bool
+	HumanEscalated bool
+	// BookingCommitted remains true even if a later model/trace operation fails,
+	// allowing the application to acknowledge the already-durable side effect.
+	BookingCommitted bool
+	// CustomerResponseDisposition and CustomerResponseToolCallID are populated
+	// only after the runner validates a sole respond_to_customer terminal call.
+	// The application uses this server-validated signal to update its durable
+	// consecutive-clarification policy while persisting Message.
+	CustomerResponseDisposition tools.CustomerResponseDisposition
+	CustomerResponseToolCallID  string
 }
 
 // Run performs LLM -> all returned tools -> LLM until the assistant emits no
@@ -157,6 +176,7 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 
 	history := cloneMessages(request.Messages)
 	result := TurnResult{Messages: history}
+	usedToolCallIDs := make(map[string]struct{})
 	for iteration := 1; iteration <= r.config.MaxIterations; iteration++ {
 		if err := turnContext.Err(); err != nil {
 			return result, turnContextError(err)
@@ -165,6 +185,7 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 		modelRequest := llm.Request{
 			Messages:        cloneMessages(history),
 			Tools:           cloneToolDefinitions(r.tools),
+			ToolChoice:      llm.ToolChoiceRequired,
 			MaxOutputTokens: r.config.MaxOutputTokensPerCall,
 		}
 		reservedTokens, err := r.tokenEstimator.Estimate(modelRequest)
@@ -180,12 +201,15 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 		response, modelErr := r.model.Complete(turnContext, modelRequest)
 		modelFinished := r.now()
 		chargedTokens := response.Usage.Total()
-		if chargedTokens <= 0 {
-			// A failed or usage-less provider request may still have consumed the
-			// full allowance. Retaining the reservation keeps the cap hard.
+		if modelErr != nil || response.UsageIncomplete || chargedTokens <= 0 {
+			// Failed calls and ambiguous provider retries may have consumed tokens
+			// without reporting them. Charge the complete worst-case reservation
+			// so the persistent conversation cap remains hard.
 			chargedTokens = reservation.ReservedTokens()
 		}
-		settleErr := reservation.Settle(context.WithoutCancel(turnContext), chargedTokens)
+		settleContext, settleCancel := boundedPersistenceContext(turnContext)
+		settleErr := reservation.Settle(settleContext, chargedTokens)
+		settleCancel()
 		if settleErr != nil {
 			return result, fmt.Errorf("agent: settle token reservation: %w", settleErr)
 		}
@@ -195,10 +219,7 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 			modelStatus = ModelCallFailed
 			modelErrorMessage = truncateUTF8(modelErr.Error(), 2000)
 		}
-		traceContext := turnContext
-		if turnContext.Err() != nil {
-			traceContext = context.WithoutCancel(turnContext)
-		}
+		traceContext, traceCancel := boundedPersistenceContext(turnContext)
 		if err := r.trace.RecordModelCall(traceContext, ModelCallTrace{
 			RunID:                 request.RunID,
 			ConversationID:        request.ConversationID,
@@ -214,8 +235,10 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 			Status:                modelStatus,
 			ErrorMessage:          modelErrorMessage,
 		}); err != nil {
+			traceCancel()
 			return result, fmt.Errorf("agent: persist model trace: %w", err)
 		}
+		traceCancel()
 		if modelErr != nil {
 			if turnContext.Err() != nil {
 				return result, turnContextError(turnContext.Err())
@@ -233,27 +256,183 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 		if assistantMessage.Role != llm.RoleAssistant {
 			return result, fmt.Errorf("agent: model returned role %q", assistantMessage.Role)
 		}
-		normalizeToolCallIDs(assistantMessage.ToolCalls, iteration)
+		normalizeToolCallIDs(assistantMessage.ToolCalls, iteration, usedToolCallIDs)
 		history = append(history, assistantMessage)
 		result.Messages = cloneMessages(history)
 		if len(assistantMessage.ToolCalls) == 0 {
-			result.Message = assistantMessage
-			return result, nil
+			return result, fmt.Errorf("%w: model returned unstructured terminal text", ErrTerminalProtocol)
 		}
 
+		terminalCallIndex := -1
+		for callIndex, call := range assistantMessage.ToolCalls {
+			if call.Name == tools.ToolRespondToCustomer {
+				terminalCallIndex = callIndex
+				break
+			}
+		}
+		if terminalCallIndex >= 0 {
+			// Preflight the complete batch before executing any sibling. A terminal
+			// response can never share a model response with a domain side effect.
+			if len(assistantMessage.ToolCalls) != 1 || terminalCallIndex != 0 {
+				return result, fmt.Errorf("%w: %s must be the only tool call in its response", ErrTerminalProtocol, tools.ToolRespondToCustomer)
+			}
+			if strings.TrimSpace(assistantMessage.Content) != "" {
+				return result, fmt.Errorf("%w: %s cannot include separate assistant content", ErrTerminalProtocol, tools.ToolRespondToCustomer)
+			}
+			call := assistantMessage.ToolCalls[0]
+			toolMessage, arguments, terminalErr := r.executeCustomerResponse(turnContext, request, iteration, call)
+			if toolMessage.Role != "" {
+				history = append(history, toolMessage)
+				result.Messages = cloneMessages(history)
+			}
+			if terminalErr != nil {
+				return result, terminalErr
+			}
+			result.Message = llm.Message{Role: llm.RoleAssistant, Content: arguments.Message}
+			result.CustomerResponseDisposition = arguments.Disposition
+			result.CustomerResponseToolCallID = call.ID
+			history = append(history, result.Message)
+			result.Messages = cloneMessages(history)
+			return result, nil
+		}
+		// A tool result must always be followed by another model response. Do not
+		// start a side effect when the iteration cap leaves no room for that
+		// response; the successful model trace already records the requested batch.
+		if iteration == r.config.MaxIterations {
+			return result, ErrIterationLimit
+		}
+
+		terminalHandoff := false
 		for callIndex, call := range assistantMessage.ToolCalls {
 			if err := turnContext.Err(); err != nil {
 				return result, turnContextError(err)
 			}
-			toolMessage, err := r.executeTool(turnContext, request, iteration, callIndex+1, len(assistantMessage.ToolCalls), call)
+			if terminalHandoff {
+				toolMessage, err := r.recordSkippedTool(turnContext, request, iteration, callIndex+1, len(assistantMessage.ToolCalls), call)
+				if err != nil {
+					return result, err
+				}
+				history = append(history, toolMessage)
+				result.Messages = cloneMessages(history)
+				continue
+			}
+			toolMessage, toolStatus, sideEffectCommitted, err := r.executeTool(turnContext, request, iteration, callIndex+1, len(assistantMessage.ToolCalls), call)
+			if sideEffectCommitted && call.Name == "create_booking" {
+				result.BookingCommitted = true
+			}
 			if err != nil {
 				return result, err
+			}
+			if toolStatus == ToolStatusRefused {
+				result.ToolRefused = true
+				terminalHandoff = true
+			}
+			if toolStatus == ToolStatusSucceeded && call.Name == "escalate_to_human" {
+				result.HumanEscalated = true
+				terminalHandoff = true
 			}
 			history = append(history, toolMessage)
 			result.Messages = cloneMessages(history)
 		}
+		if terminalHandoff {
+			content := "I’ve handed this conversation to a person. The automated agent will not take further actions."
+			if result.ToolRefused && !result.HumanEscalated {
+				content = "I couldn’t perform that action safely, so I’ve handed this conversation to a person."
+			}
+			result.Message = llm.Message{Role: llm.RoleAssistant, Content: content}
+			history = append(history, result.Message)
+			result.Messages = cloneMessages(history)
+			return result, nil
+		}
 	}
 	return result, ErrIterationLimit
+}
+
+// executeCustomerResponse validates and traces the runner-local terminal
+// control call. It deliberately records no attempts and never invokes the
+// injected ToolExecutor or the tools Gateway.
+func (r *Runner) executeCustomerResponse(
+	ctx context.Context,
+	turn TurnRequest,
+	iteration int,
+	call llm.ToolCall,
+) (llm.Message, tools.RespondToCustomerArguments, error) {
+	startedAt := r.now()
+	traceArguments := append(json.RawMessage(nil), call.Arguments...)
+	if len(traceArguments) > maxToolArgumentBytes || !json.Valid(traceArguments) {
+		traceArguments = json.RawMessage(`{"redacted":"invalid or oversized terminal arguments"}`)
+	}
+	startTrace := ToolExecutionStartedTrace{
+		RunID:           turn.RunID,
+		ConversationID:  turn.ConversationID,
+		Iteration:       iteration,
+		CallIndex:       1,
+		CallCount:       1,
+		CallID:          call.ID,
+		ToolName:        tools.ToolRespondToCustomer,
+		ContractVersion: r.toolVersion(tools.ToolRespondToCustomer),
+		Arguments:       traceArguments,
+		StartedAt:       startedAt,
+	}
+	if err := r.trace.RecordToolExecutionStarted(ctx, startTrace); err != nil {
+		return llm.Message{}, tools.RespondToCustomerArguments{}, fmt.Errorf("agent: persist terminal response parent trace: %w", err)
+	}
+
+	arguments, parseErr := tools.ParseRespondToCustomerArguments(call.Arguments)
+	if len(call.Arguments) > maxToolArgumentBytes {
+		parseErr = errors.New("terminal response arguments exceed the size limit")
+	}
+	status := ToolStatusSucceeded
+	resultPayload := map[string]any{
+		"status": "success",
+		"data":   arguments,
+	}
+	if parseErr != nil {
+		status = ToolStatusFailed
+		resultPayload = map[string]any{
+			"status": "error",
+			"error": map[string]any{
+				"code":    "INVALID_ARGUMENT",
+				"message": "The terminal response did not match the required contract.",
+			},
+		}
+	}
+	encodedResult, marshalErr := json.Marshal(resultPayload)
+	if marshalErr != nil {
+		return llm.Message{}, tools.RespondToCustomerArguments{}, fmt.Errorf("agent: encode terminal response result: %w", marshalErr)
+	}
+	toolMessage := llm.Message{
+		Role:       llm.RoleTool,
+		Name:       tools.ToolRespondToCustomer,
+		ToolCallID: call.ID,
+		Content:    string(encodedResult),
+	}
+	finishedAt := r.now()
+	traceContext, traceCancel := boundedPersistenceContext(ctx)
+	defer traceCancel()
+	if err := r.trace.RecordToolExecutionCompleted(traceContext, ToolExecutionCompletedTrace{
+		RunID:           turn.RunID,
+		ConversationID:  turn.ConversationID,
+		Iteration:       iteration,
+		CallIndex:       1,
+		CallID:          call.ID,
+		ToolName:        tools.ToolRespondToCustomer,
+		ContractVersion: r.toolVersion(tools.ToolRespondToCustomer),
+		StartedAt:       startedAt,
+		FinishedAt:      finishedAt,
+		Status:          status,
+		Result:          encodedResult,
+		AttemptCount:    0,
+	}); err != nil {
+		return toolMessage, tools.RespondToCustomerArguments{}, fmt.Errorf("agent: persist terminal response completion trace: %w", err)
+	}
+	if parseErr != nil {
+		return toolMessage, tools.RespondToCustomerArguments{}, fmt.Errorf("%w: invalid %s arguments", ErrTerminalProtocol, tools.ToolRespondToCustomer)
+	}
+	if err := ctx.Err(); err != nil {
+		return toolMessage, tools.RespondToCustomerArguments{}, turnContextError(err)
+	}
+	return toolMessage, arguments, nil
 }
 
 func (r *Runner) executeTool(
@@ -263,7 +442,7 @@ func (r *Runner) executeTool(
 	callIndex int,
 	callCount int,
 	call llm.ToolCall,
-) (llm.Message, error) {
+) (llm.Message, ToolStatus, bool, error) {
 	startedAt := r.now()
 	traceArguments := append(json.RawMessage(nil), call.Arguments...)
 	if len(traceArguments) > maxToolArgumentBytes || !json.Valid(traceArguments) {
@@ -286,7 +465,7 @@ func (r *Runner) executeTool(
 		StartedAt:       startedAt,
 	}
 	if err := r.trace.RecordToolExecutionStarted(ctx, startTrace); err != nil {
-		return llm.Message{}, fmt.Errorf("agent: persist tool parent trace: %w", err)
+		return llm.Message{}, "", false, fmt.Errorf("agent: persist tool parent trace: %w", err)
 	}
 
 	execution := ToolExecution{}
@@ -322,8 +501,24 @@ func (r *Runner) executeTool(
 	finishedAt := r.now()
 	if len(execution.Content) == 0 || len(execution.Content) > maxToolResultBytes || !json.Valid(execution.Content) {
 		attempts := execution.Attempts
+		sideEffectCommitted := execution.SideEffectCommitted
 		execution = modelFacingToolError("INVALID_TOOL_RESULT", "The tool returned an invalid result.")
 		execution.Attempts = attempts
+		execution.SideEffectCommitted = sideEffectCommitted
+	}
+	status := execution.Status
+	if status != ToolStatusSucceeded && status != ToolStatusFailed &&
+		status != ToolStatusRefused && status != ToolStatusConfirmationRequired {
+		status = ToolStatusSucceeded
+		if execution.IsError {
+			status = ToolStatusFailed
+		}
+	}
+	toolMessage := llm.Message{
+		Role:       llm.RoleTool,
+		Name:       call.Name,
+		ToolCallID: call.ID,
+		Content:    string(execution.Content),
 	}
 
 	if executorInvoked && len(execution.Attempts) == 0 {
@@ -338,6 +533,8 @@ func (r *Runner) executeTool(
 			Detail:     append(json.RawMessage(nil), execution.Content...),
 		}}
 	}
+	traceContext, traceCancel := boundedPersistenceContext(ctx)
+	defer traceCancel()
 	for attemptIndex, attempt := range execution.Attempts {
 		if attempt.StartedAt.IsZero() {
 			attempt.StartedAt = startedAt
@@ -354,7 +551,7 @@ func (r *Runner) executeTool(
 		if len(attempt.Detail) == 0 || len(attempt.Detail) > maxToolResultBytes || !json.Valid(attempt.Detail) {
 			attempt.Detail = json.RawMessage(`null`)
 		}
-		if err := r.trace.RecordToolAttempt(ctx, ToolAttemptTrace{
+		if err := r.trace.RecordToolAttempt(traceContext, ToolAttemptTrace{
 			RunID:           turn.RunID,
 			ConversationID:  turn.ConversationID,
 			Iteration:       iteration,
@@ -368,19 +565,10 @@ func (r *Runner) executeTool(
 			Status:          attempt.Status,
 			Detail:          append(json.RawMessage(nil), attempt.Detail...),
 		}); err != nil {
-			return llm.Message{}, fmt.Errorf("agent: persist tool attempt trace: %w", err)
+			return toolMessage, status, execution.SideEffectCommitted, fmt.Errorf("agent: persist tool attempt trace: %w", err)
 		}
 	}
-
-	status := execution.Status
-	if status != ToolStatusSucceeded && status != ToolStatusFailed &&
-		status != ToolStatusRefused && status != ToolStatusConfirmationRequired {
-		status = ToolStatusSucceeded
-		if execution.IsError {
-			status = ToolStatusFailed
-		}
-	}
-	if err := r.trace.RecordToolExecutionCompleted(ctx, ToolExecutionCompletedTrace{
+	if err := r.trace.RecordToolExecutionCompleted(traceContext, ToolExecutionCompletedTrace{
 		RunID:           turn.RunID,
 		ConversationID:  turn.ConversationID,
 		Iteration:       iteration,
@@ -394,14 +582,50 @@ func (r *Runner) executeTool(
 		Result:          append(json.RawMessage(nil), execution.Content...),
 		AttemptCount:    len(execution.Attempts),
 	}); err != nil {
-		return llm.Message{}, fmt.Errorf("agent: persist tool completion trace: %w", err)
+		return toolMessage, status, execution.SideEffectCommitted, fmt.Errorf("agent: persist tool completion trace: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return toolMessage, status, execution.SideEffectCommitted, turnContextError(err)
 	}
 
+	return toolMessage, status, execution.SideEffectCommitted, nil
+}
+
+func (r *Runner) recordSkippedTool(
+	ctx context.Context,
+	turn TurnRequest,
+	iteration, callIndex, callCount int,
+	call llm.ToolCall,
+) (llm.Message, error) {
+	startedAt := r.now()
+	arguments := append(json.RawMessage(nil), call.Arguments...)
+	if len(arguments) > maxToolArgumentBytes || !json.Valid(arguments) {
+		arguments = json.RawMessage(`{"redacted":"invalid or oversized tool arguments"}`)
+	}
+	toolName := truncateUTF8(call.Name, 100)
+	if toolName == "" {
+		toolName = "unknown_tool"
+	}
+	if err := r.trace.RecordToolExecutionStarted(ctx, ToolExecutionStartedTrace{
+		RunID: turn.RunID, ConversationID: turn.ConversationID, Iteration: iteration,
+		CallIndex: callIndex, CallCount: callCount, CallID: call.ID, ToolName: toolName,
+		ContractVersion: r.toolVersion(call.Name), Arguments: arguments, StartedAt: startedAt,
+	}); err != nil {
+		return llm.Message{}, fmt.Errorf("agent: persist skipped tool parent trace: %w", err)
+	}
+	execution := modelFacingToolError("SKIPPED_AFTER_HANDOFF", "The call was not executed because this response already triggered a human hand-off.")
+	execution.Status = ToolStatusRefused
+	finishedAt := r.now()
+	if err := r.trace.RecordToolExecutionCompleted(ctx, ToolExecutionCompletedTrace{
+		RunID: turn.RunID, ConversationID: turn.ConversationID, Iteration: iteration,
+		CallIndex: callIndex, CallID: call.ID, ToolName: toolName,
+		ContractVersion: r.toolVersion(call.Name), StartedAt: startedAt, FinishedAt: finishedAt,
+		Status: ToolStatusRefused, Result: execution.Content,
+	}); err != nil {
+		return llm.Message{}, fmt.Errorf("agent: persist skipped tool completion trace: %w", err)
+	}
 	return llm.Message{
-		Role:       llm.RoleTool,
-		Name:       call.Name,
-		ToolCallID: call.ID,
-		Content:    string(execution.Content),
+		Role: llm.RoleTool, Name: call.Name, ToolCallID: call.ID, Content: string(execution.Content),
 	}, nil
 }
 
@@ -476,16 +700,25 @@ func (r *Runner) toolVersion(name string) string {
 	return "unregistered"
 }
 
-func normalizeToolCallIDs(calls []llm.ToolCall, iteration int) {
-	seen := make(map[string]struct{}, len(calls))
+func normalizeToolCallIDs(calls []llm.ToolCall, iteration int, seen map[string]struct{}) {
+	if seen == nil {
+		seen = make(map[string]struct{}, len(calls))
+	}
 	for i := range calls {
-		if calls[i].ID == "" || len(calls[i].ID) > 200 {
-			calls[i].ID = fmt.Sprintf("model-call-%d-%d", iteration, i+1)
+		candidate := calls[i].ID
+		_, duplicate := seen[candidate]
+		if candidate == "" || len(candidate) > 200 || duplicate {
+			base := fmt.Sprintf("model-call-%d-%d", iteration, i+1)
+			candidate = base
+			for suffix := 2; ; suffix++ {
+				if _, exists := seen[candidate]; !exists {
+					break
+				}
+				candidate = fmt.Sprintf("%s-%d", base, suffix)
+			}
 		}
-		if _, duplicate := seen[calls[i].ID]; duplicate {
-			calls[i].ID = fmt.Sprintf("model-call-%d-%d", iteration, i+1)
-		}
-		seen[calls[i].ID] = struct{}{}
+		calls[i].ID = candidate
+		seen[candidate] = struct{}{}
 	}
 }
 
@@ -498,4 +731,11 @@ func truncateUTF8(value string, maxBytes int) string {
 		end--
 	}
 	return value[:end]
+}
+
+func boundedPersistenceContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent.Err() == nil {
+		return parent, func() {}
+	}
+	return context.WithTimeout(context.WithoutCancel(parent), 3*time.Second)
 }

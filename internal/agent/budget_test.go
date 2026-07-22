@@ -2,10 +2,33 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
+
+	"github.com/reinhlord/kontor/internal/llm"
 )
+
+func TestConservativeTokenEstimatorReservesWorstCaseProviderRetries(t *testing.T) {
+	t.Parallel()
+	request := llm.Request{
+		Messages:        []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+		Tools:           []llm.ToolDefinition{{Name: "first", Parameters: json.RawMessage(`{"type":"object"}`)}},
+		MaxOutputTokens: 100,
+	}
+	oneAttempt, err := (ConservativeTokenEstimator{}).Estimate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threeAttempts, err := (ConservativeTokenEstimator{ProviderAttempts: 3}).Estimate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if threeAttempts != oneAttempt*3 {
+		t.Fatalf("retry reservation = %d, want %d", threeAttempts, oneAttempt*3)
+	}
+}
 
 func TestMemoryTokenBudgetSettlesAndEnforcesPerConversationCap(t *testing.T) {
 	t.Parallel()

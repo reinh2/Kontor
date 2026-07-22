@@ -72,7 +72,7 @@ func run() error {
 		Handler:           demohttp.New(components.Application, components.Trace, pool, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      35 * time.Second,
+		WriteTimeout:      cfg.Agent.TurnTimeout + 10*time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 

@@ -171,6 +171,71 @@ func (b *ToolBackend) CreateBooking(ctx context.Context, command toolapi.CreateB
 	}, nil
 }
 
+// Escalate persists the model-requested hand-off under the same trusted
+// customer/conversation scope used by booking tools. A repeated tool call in
+// one agent run returns the original escalation.
+func (b *ToolBackend) Escalate(ctx context.Context, command toolapi.EscalationCommand) (toolapi.EscalationOutcome, error) {
+	if err := b.authorizeTenant(command.TenantID); err != nil {
+		return toolapi.EscalationOutcome{}, err
+	}
+	if command.OwnerCustomerID == "" || command.ConversationID == "" ||
+		command.ReasonCode == "" || command.Summary == "" {
+		return toolapi.EscalationOutcome{}, toolapi.ErrNotFoundOrNotOwned
+	}
+	tx, err := b.repository.pool.Begin(ctx)
+	if err != nil {
+		return toolapi.EscalationOutcome{}, fmt.Errorf("%w: begin escalation: %v", toolapi.ErrDependencyUnavailable, err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	tag, err := tx.Exec(ctx, `
+		UPDATE conversations SET status='escalated',updated_at=now()
+		WHERE tenant_id=$1 AND id=$2 AND customer_id=$3`,
+		command.TenantID, command.ConversationID, command.OwnerCustomerID)
+	if err != nil {
+		return toolapi.EscalationOutcome{}, fmt.Errorf("%w: mark conversation escalated: %v", toolapi.ErrDependencyUnavailable, err)
+	}
+	if tag.RowsAffected() != 1 {
+		return toolapi.EscalationOutcome{}, toolapi.ErrNotFoundOrNotOwned
+	}
+
+	var outcome toolapi.EscalationOutcome
+	if command.AgentRunID != "" && command.ToolCallID != "" {
+		err = tx.QueryRow(ctx, `
+			WITH inserted AS (
+				INSERT INTO escalations
+					(tenant_id,conversation_id,customer_id,agent_run_id,source_tool_call_id,reason_code,summary)
+				VALUES($1,$2,$3,$4,$5,$6,$7)
+				ON CONFLICT (tenant_id,agent_run_id,source_tool_call_id)
+					WHERE source_tool_call_id IS NOT NULL DO NOTHING
+				RETURNING id::text,status
+			)
+			SELECT id,status,false FROM inserted
+			UNION ALL
+			SELECT id::text,status,true FROM escalations
+			WHERE tenant_id=$1 AND agent_run_id=$4 AND source_tool_call_id=$5
+			  AND NOT EXISTS (SELECT 1 FROM inserted)
+			LIMIT 1`,
+			command.TenantID, command.ConversationID, command.OwnerCustomerID,
+			command.AgentRunID, command.ToolCallID, command.ReasonCode, command.Summary).
+			Scan(&outcome.ID, &outcome.Status, &outcome.Replayed)
+	} else {
+		err = tx.QueryRow(ctx, `
+			INSERT INTO escalations
+				(tenant_id,conversation_id,customer_id,reason_code,summary)
+			VALUES($1,$2,$3,$4,$5)
+			RETURNING id::text,status`,
+			command.TenantID, command.ConversationID, command.OwnerCustomerID,
+			command.ReasonCode, command.Summary).Scan(&outcome.ID, &outcome.Status)
+	}
+	if err != nil {
+		return toolapi.EscalationOutcome{}, fmt.Errorf("%w: persist escalation: %v", toolapi.ErrDependencyUnavailable, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return toolapi.EscalationOutcome{}, fmt.Errorf("%w: commit escalation: %v", toolapi.ErrDependencyUnavailable, err)
+	}
+	return outcome, nil
+}
+
 func (b *ToolBackend) authorizeTenant(tenantID string) error {
 	if b == nil || b.repository == nil {
 		return fmt.Errorf("%w: scheduling repository is unavailable", toolapi.ErrDependencyUnavailable)

@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
+
+const maxCustomerResponseRunes = 2000
 
 type compiledDefinition struct {
 	definition Definition
@@ -66,9 +69,39 @@ func validateArguments(schema *jsonschema.Schema, raw json.RawMessage) (map[stri
 	return object, nil
 }
 
+// ParseRespondToCustomerArguments validates the runner-local terminal control
+// call without dispatching it through Gateway. Keep these checks aligned with
+// the published JSON Schema in contracts.go.
+func ParseRespondToCustomerArguments(raw json.RawMessage) (RespondToCustomerArguments, error) {
+	if err := rejectDuplicateKeys(raw); err != nil {
+		return RespondToCustomerArguments{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var arguments RespondToCustomerArguments
+	if err := decoder.Decode(&arguments); err != nil {
+		return RespondToCustomerArguments{}, errors.New("arguments must match the respond_to_customer v1 contract")
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return RespondToCustomerArguments{}, errors.New("arguments contain more than one JSON value")
+	}
+	switch arguments.Disposition {
+	case ResponseComplete, ResponseClarificationNeeded:
+	default:
+		return RespondToCustomerArguments{}, errors.New("invalid customer response disposition")
+	}
+	if strings.TrimSpace(arguments.Message) == "" || utf8.RuneCountInString(arguments.Message) > maxCustomerResponseRunes {
+		return RespondToCustomerArguments{}, errors.New("customer response message must contain 1 to 2000 characters")
+	}
+	return arguments, nil
+}
+
 var forbiddenIdentityFields = map[string]struct{}{
 	"tenant_id":           {},
 	"customer_id":         {},
+	"agent_run_id":        {},
+	"inbound_message_id":  {},
+	"tool_call_id":        {},
 	"principal_id":        {},
 	"owner_id":            {},
 	"owner_customer_id":   {},
