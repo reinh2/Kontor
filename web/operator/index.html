@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html data-theme="dark" lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kontor · Operator</title>
+  <link rel="stylesheet" href="/operator/ds/styles.css">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="/operator/ds/bundle.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg-base); color: var(--text-primary); font-family: var(--font-sans); font-size: var(--fs-body); line-height: var(--lh-normal); }
+    .app-shell { display: flex; height: 100vh; overflow: hidden; }
+    .sidebar { width: 236px; min-width: 236px; background: var(--surface-1); border-right: 1px solid var(--border-subtle); display: flex; flex-direction: column; padding: var(--space-4) 0; overflow-y: auto; }
+    .sidebar-brand { display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-4); margin-bottom: var(--space-6); }
+    .sidebar-monogram { width: 28px; height: 28px; border-radius: var(--radius-md); background: var(--accent); display: flex; align-items: center; justify-content: center; color: var(--text-on-accent); font-weight: var(--fw-bold); font-size: var(--fs-body-sm); }
+    .sidebar-title { font-weight: var(--fw-semibold); font-size: var(--fs-body-lg); color: var(--text-primary); }
+    .sidebar-nav { flex: 1; display: flex; flex-direction: column; gap: var(--space-0-5); padding: 0 var(--space-2); }
+    .nav-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); color: var(--text-secondary); font-size: var(--fs-body); font-weight: var(--fw-medium); cursor: pointer; text-decoration: none; border: none; background: none; width: 100%; text-align: left; transition: var(--transition-colors); }
+    .nav-item:hover { background: var(--surface-hover); color: var(--text-primary); }
+    .nav-item:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+    .nav-item.active { background: var(--accent-subtle); color: var(--text-accent); }
+    .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .sidebar-bottom { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border-subtle); margin-top: auto; display: flex; align-items: center; gap: var(--space-3); }
+    .avatar { width: 32px; height: 32px; border-radius: var(--radius-full); display: flex; align-items: center; justify-content: center; font-size: var(--fs-caption); font-weight: var(--fw-semibold); flex-shrink: 0; }
+    .avatar-accent { background: var(--accent-subtle); color: var(--text-accent); }
+    .sidebar-user-name { font-size: var(--fs-body-sm); font-weight: var(--fw-medium); color: var(--text-primary); }
+    .sidebar-user-sub { font-size: var(--fs-caption); color: var(--text-tertiary); }
+    .topbar { height: 56px; background: var(--surface-1); border-bottom: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-5); flex-shrink: 0; }
+    .topbar-left { display: flex; align-items: center; gap: var(--space-3); }
+    .topbar-title { font-size: var(--fs-body-lg); font-weight: var(--fw-semibold); color: var(--text-primary); }
+    .topbar-sub { font-size: var(--fs-body-sm); color: var(--text-tertiary); }
+    .topbar-right { display: flex; align-items: center; gap: var(--space-3); }
+    .range-tabs { display: flex; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-default); }
+    .range-tab { padding: var(--space-1-5) var(--space-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); color: var(--text-secondary); background: var(--surface-1); border: none; cursor: pointer; transition: var(--transition-colors); }
+    .range-tab:hover { color: var(--text-primary); background: var(--surface-hover); }
+    .range-tab.active { background: var(--accent-subtle); color: var(--text-accent); }
+    .range-tab:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+    .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .content { flex: 1; overflow-y: auto; padding: var(--space-5); }
+    /* KPI Grid */
+    .kpi-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--space-4); margin-bottom: var(--space-5); }
+    .kpi-card { background: var(--surface-1); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+    .kpi-label { font-size: var(--fs-micro); font-weight: var(--fw-medium); text-transform: uppercase; letter-spacing: var(--ls-caps); color: var(--text-tertiary); }
+    .kpi-value { font-family: var(--font-mono); font-size: var(--fs-h2); font-weight: var(--fw-semibold); color: var(--text-primary); }
+    .kpi-sparkline { height: 34px; width: 100%; }
+    .kpi-delta { font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+    .kpi-delta.positive { color: var(--status-success-fg); }
+    .kpi-delta.negative { color: var(--status-error-fg); }
+
+    /* Charts */
+    .charts-row { display: grid; grid-template-columns: 2fr 1fr; gap: var(--space-4); margin-bottom: var(--space-5); }
+    .chart-card { background: var(--surface-1); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: var(--space-5); }
+    .chart-title { font-size: var(--fs-body-lg); font-weight: var(--fw-semibold); color: var(--text-primary); margin-bottom: var(--space-1); }
+    .chart-subtitle { font-size: var(--fs-body-sm); color: var(--text-tertiary); margin-bottom: var(--space-4); }
+    .chart-legend { display: flex; gap: var(--space-4); margin-top: var(--space-3); }
+    .legend-item { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-caption); color: var(--text-secondary); }
+    .legend-dot { width: 8px; height: 8px; border-radius: var(--radius-full); }
+
+    /* Data Table */
+    .data-table-wrap { background: var(--surface-1); border: 1px solid var(--border-default); border-radius: var(--radius-lg); overflow: hidden; }
+    .data-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body-sm); }
+    .data-table th { text-align: left; padding: var(--space-3) var(--space-4); font-size: var(--fs-micro); font-weight: var(--fw-medium); text-transform: uppercase; letter-spacing: var(--ls-caps); color: var(--text-tertiary); border-bottom: 1px solid var(--border-default); background: var(--surface-2); white-space: nowrap; }
+    .data-table td { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); }
+    .data-table tr[role="button"] { cursor: pointer; transition: var(--transition-colors); }
+    .data-table tr[role="button"]:hover td { background: var(--surface-hover); }
+    .data-table tr[role="button"]:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+    .data-table .mono { font-family: var(--font-mono); font-size: var(--fs-body-sm); color: var(--text-primary); }
+    .data-table .accent { color: var(--text-accent); }
+    /* Badge */
+    .badge { display: inline-flex; align-items: center; padding: var(--space-0-5) var(--space-2); border-radius: var(--radius-full); font-size: var(--fs-micro); font-weight: var(--fw-medium); white-space: nowrap; }
+    .badge-success { background: var(--status-success-bg); color: var(--status-success-fg); border: 1px solid var(--status-success-border); }
+    .badge-warning { background: var(--status-warning-bg); color: var(--status-warning-fg); border: 1px solid var(--status-warning-border); }
+    .badge-error { background: var(--status-error-bg); color: var(--status-error-fg); border: 1px solid var(--status-error-border); }
+    .badge-neutral { background: var(--status-neutral-bg); color: var(--status-neutral-fg); border: 1px solid var(--status-neutral-border); }
+
+    /* Attention panel */
+    .attention-panel { background: var(--surface-1); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: var(--space-4); margin-top: var(--space-5); }
+    .attention-title { font-size: var(--fs-body); font-weight: var(--fw-semibold); color: var(--text-primary); margin-bottom: var(--space-3); }
+    .attention-item { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
+    .attention-item:last-child { border-bottom: none; }
+    .attention-dot { width: 8px; height: 8px; border-radius: var(--radius-full); flex-shrink: 0; margin-top: 6px; }
+    .attention-dot.warning { background: var(--status-warning-fg); }
+    .attention-dot.error { background: var(--status-error-fg); }
+    .attention-body { flex: 1; }
+    .attention-item-title { font-size: var(--fs-body-sm); font-weight: var(--fw-medium); color: var(--text-primary); }
+    .attention-ref { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-tertiary); }
+    .attention-action { font-size: var(--fs-body-sm); font-weight: var(--fw-medium); color: var(--text-accent); background: none; border: none; cursor: pointer; padding: 0; }
+    .attention-action:hover { text-decoration: underline; }
+    .attention-action:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+
+    /* Trace layout */
+    .trace-layout { display: grid; grid-template-columns: 45% 55%; gap: var(--space-5); }
+    .trace-summary { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-4); padding: var(--space-4); background: var(--surface-1); border: 1px solid var(--border-default); border-radius: var(--radius-lg); }
+    .trace-summary-item { display: flex; flex-direction: column; gap: var(--space-1); }
+    .trace-summary-label { font-size: var(--fs-micro); font-weight: var(--fw-medium); text-transform: uppercase; letter-spacing: var(--ls-caps); color: var(--text-tertiary); }
+    .trace-summary-value { font-family: var(--font-mono); font-size: var(--fs-body-sm); color: var(--text-primary); }
+    /* Key-Value */
+    .kv-block { background: var(--surface-1); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: var(--space-4); margin-bottom: var(--space-4); }
+    .kv-row { display: flex; justify-content: space-between; padding: var(--space-2) 0; border-bottom: 1px solid var(--border-subtle); }
+    .kv-row:last-child { border-bottom: none; }
+    .kv-label { font-size: var(--fs-body-sm); color: var(--text-tertiary); }
+    .kv-value { font-size: var(--fs-body-sm); color: var(--text-primary); }
+    .kv-value.mono { font-family: var(--font-mono); }
+
+    /* Conversation pane */
+    .conversation { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4); background: var(--surface-1); border: 1px solid var(--border-default); border-radius: var(--radius-lg); overflow-y: auto; max-height: calc(100vh - 200px); }
+    .msg { display: flex; gap: var(--space-3); align-items: flex-start; }
+    .msg-avatar { width: 32px; height: 32px; border-radius: var(--radius-full); display: flex; align-items: center; justify-content: center; font-size: var(--fs-caption); font-weight: var(--fw-semibold); flex-shrink: 0; }
+    .msg-avatar.user { background: var(--accent); color: var(--text-on-accent); }
+    .msg-avatar.agent { background: var(--surface-3); color: var(--text-secondary); }
+    .msg-bubble { padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); max-width: 80%; font-size: var(--fs-body-sm); line-height: var(--lh-normal); }
+    .msg-bubble.user { background: var(--accent); color: var(--text-on-accent); }
+    .msg-bubble.agent { background: var(--surface-3); border: 1px solid var(--border-subtle); color: var(--text-primary); }
+    .msg-time { font-family: var(--font-mono); font-size: var(--fs-micro); color: var(--text-tertiary); margin-top: var(--space-1); }
+
+    /* Timeline */
+    .timeline { position: relative; padding-left: var(--space-6); }
+    .timeline::before { content: ''; position: absolute; left: 9px; top: 8px; bottom: 8px; width: 2px; background: var(--border-subtle); }
+    .timeline-step { position: relative; padding: var(--space-3) 0; }
+    .timeline-dot { position: absolute; left: calc(-1 * var(--space-6) + 4px); top: 16px; width: 12px; height: 12px; border-radius: var(--radius-full); border: 2px solid var(--bg-base); }
+    .timeline-dot.success { background: var(--status-success-fg); }
+    .timeline-dot.running { background: var(--text-accent); animation: pulse 1.5s ease-in-out infinite; }
+    .timeline-dot.failed { background: var(--status-error-fg); }
+    .timeline-dot.retried { background: var(--status-warning-fg); }
+    .timeline-dot.pending { background: var(--text-tertiary); }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .step-header { display: flex; align-items: center; gap: var(--space-3); }
+    .step-title { font-size: var(--fs-body-sm); font-weight: var(--fw-medium); color: var(--text-primary); }
+    .step-time { font-family: var(--font-mono); font-size: var(--fs-micro); color: var(--text-tertiary); }
+    .step-meta { display: flex; gap: var(--space-3); margin-top: var(--space-1); }
+    .step-duration { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-secondary); }
+    .step-tokens { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-tertiary); }
+    .step-retry { margin-left: var(--space-4); padding: var(--space-2) 0; border-left: 2px solid var(--status-warning-border); padding-left: var(--space-3); }
+    .step-retry-label { font-size: var(--fs-micro); color: var(--status-warning-fg); font-weight: var(--fw-medium); }
+    /* Calendar */
+    .calendar-header { display: flex; align-items: center; gap: var(--space-4); margin-bottom: var(--space-4); }
+    .calendar-header h2 { font-size: var(--fs-h3); font-weight: var(--fw-semibold); margin: 0; }
+    .calendar-nav { background: none; border: 1px solid var(--border-default); border-radius: var(--radius-md); width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-secondary); transition: var(--transition-colors); }
+    .calendar-nav:hover { background: var(--surface-hover); color: var(--text-primary); }
+    .calendar-nav:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+    .calendar-grid { display: grid; grid-template-columns: 100px repeat(7, 1fr); background: var(--surface-1); border: 1px solid var(--border-default); border-radius: var(--radius-lg); overflow: hidden; }
+    .cal-header-cell { padding: var(--space-3); font-size: var(--fs-micro); font-weight: var(--fw-medium); text-transform: uppercase; letter-spacing: var(--ls-caps); color: var(--text-tertiary); text-align: center; border-bottom: 1px solid var(--border-default); background: var(--surface-2); }
+    .cal-staff-cell { padding: var(--space-3); font-size: var(--fs-body-sm); font-weight: var(--fw-medium); color: var(--text-primary); border-bottom: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle); display: flex; align-items: center; }
+    .cal-day-cell { padding: var(--space-2); border-bottom: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle); min-height: 80px; position: relative; }
+    .cal-booking { background: var(--surface-2); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); padding: var(--space-1-5) var(--space-2); margin-bottom: var(--space-1); font-size: var(--fs-micro); }
+    .cal-booking-name { color: var(--text-primary); font-weight: var(--fw-medium); }
+    .cal-booking-time { font-family: var(--font-mono); color: var(--text-tertiary); font-size: var(--fs-micro); }
+    .cal-now-line { position: absolute; top: 50%; left: 0; right: 0; height: 2px; background: var(--status-error-fg); z-index: 2; }
+    .cal-now-line::before { content: ''; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--status-error-fg); }
+
+    /* Bottom dashboard sections */
+    .bottom-row { display: grid; grid-template-columns: 2fr 1fr; gap: var(--space-4); margin-top: var(--space-5); }
+
+    /* Responsive */
+    @media (max-width: 759px) {
+      .sidebar { display: none; }
+    }
+    @media (max-width: 1100px) {
+      .trace-layout { grid-template-columns: 1fr; }
+      .kpi-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 600px) {
+      .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+      .charts-row { grid-template-columns: 1fr; }
+      .bottom-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+'use strict';
+var h = React.createElement;
+
+// ── Fixture Data ──────────────────────────────────────────────────────────────
+var RUNS = [
+  { id: 'run_7f3a9c21', customer: 'Marta Lindqvist', channel: 'Telegram', outcome: 'success', duration: '2.94s', tokens: 3847, time: '14:32', date: '2026-07-22' },
+  { id: 'run_a4e1b802', customer: 'Erik Johansson', channel: 'Web widget', outcome: 'success', duration: '1.82s', tokens: 2104, time: '14:18', date: '2026-07-22' },
+  { id: 'run_c9d2f156', customer: 'Lisa Bergman', channel: 'Telegram', outcome: 'escalated', duration: '4.12s', tokens: 5320, time: '13:55', date: '2026-07-22' },
+  { id: 'run_d3a7e491', customer: 'Oscar Nilsson', channel: 'Web widget', outcome: 'success', duration: '2.11s', tokens: 2890, time: '13:40', date: '2026-07-22' },
+  { id: 'run_e5b8c734', customer: 'Anna Ek', channel: 'Telegram', outcome: 'success', duration: '1.95s', tokens: 2456, time: '13:22', date: '2026-07-22' },
+  { id: 'run_f1c9d288', customer: 'Karl Svensson', channel: 'Web widget', outcome: 'failed', duration: '3.67s', tokens: 4102, time: '12:58', date: '2026-07-22' },
+  { id: 'run_a2d4e619', customer: 'Sofia Dahl', channel: 'Telegram', outcome: 'success', duration: '2.30s', tokens: 3011, time: '12:41', date: '2026-07-22' },
+  { id: 'run_b7f2a843', customer: 'Jonas Lund', channel: 'Telegram', outcome: 'success', duration: '1.68s', tokens: 1987, time: '12:15', date: '2026-07-22' },
+  { id: 'run_c4e8d972', customer: 'Maja Forsberg', channel: 'Web widget', outcome: 'success', duration: '2.54s', tokens: 3240, time: '11:50', date: '2026-07-22' },
+  { id: 'run_d9a1b354', customer: 'Henrik Blom', channel: 'Telegram', outcome: 'escalated', duration: '5.01s', tokens: 6120, time: '11:32', date: '2026-07-22' },
+  { id: 'run_e2c5f687', customer: 'Elsa Nyberg', channel: 'Web widget', outcome: 'success', duration: '1.74s', tokens: 2215, time: '11:10', date: '2026-07-22' },
+  { id: 'run_f8a3b219', customer: 'Gustav Holm', channel: 'Telegram', outcome: 'success', duration: '2.88s', tokens: 3560, time: '10:48', date: '2026-07-22' },
+  { id: 'run_a5d7c481', customer: 'Ida Persson', channel: 'Telegram', outcome: 'success', duration: '2.02s', tokens: 2678, time: '10:25', date: '2026-07-22' },
+  { id: 'run_b1e9f652', customer: 'Nils Hedlund', channel: 'Web widget', outcome: 'failed', duration: '3.44s', tokens: 4450, time: '10:02', date: '2026-07-22' },
+  { id: 'run_c6a2d893', customer: 'Astrid Viklund', channel: 'Telegram', outcome: 'success', duration: '1.91s', tokens: 2340, time: '09:38', date: '2026-07-22' }
+];
+
+var TRACE_STEPS = [
+  { id: 1, t: '14:32:07', title: 'list_services', state: 'success', duration: '120ms', tokens: 312 },
+  { id: 2, t: '14:32:08', title: 'list_staff', state: 'success', duration: '95ms', tokens: 287 },
+  { id: 3, t: '14:32:08', title: 'find_slots', state: 'retried', duration: '2.1s', tokens: 1840, retries: [
+    { attempt: 1, state: 'failed', detail: 'Calendar provider timeout (504)', duration: '1.8s' },
+    { attempt: 2, state: 'success', detail: 'Returned 3 available slots', duration: '290ms' }
+  ]},
+  { id: 4, t: '14:32:11', title: 'create_booking', state: 'success', duration: '180ms', tokens: 524 },
+  { id: 5, t: '14:32:11', title: 'upsert_crm_contact', state: 'success', duration: '65ms', tokens: 198 },
+  { id: 6, t: '14:32:12', title: 'respond_to_customer', state: 'running', duration: '...', tokens: 686 }
+];
+
+var MESSAGES = [
+  { from: 'user', text: 'Sometime Thursday evening', time: '14:32' },
+  { from: 'agent', text: 'Here are the available slots for Thursday evening:\n\n17:00, 18:00, 18:30\n\nWhich one works best for you?', time: '14:32' },
+  { from: 'user', text: '18:30 works', time: '14:32' },
+  { from: 'agent', text: 'Your appointment is booked for Thursday at 18:30 with Alex Rivera. See you then!', time: '14:32' }
+];
+
+var ATTENTION_ITEMS = [
+  { type: 'warning', title: 'Escalated: customer requesting refund', ref: 'run_c9d2f156', action: 'Review' },
+  { type: 'error', title: 'Failed: booking provider unreachable', ref: 'run_f1c9d288', action: 'Review' },
+  { type: 'warning', title: 'Escalated: repeat customer complaint', ref: 'run_d9a1b354', action: 'Review' },
+  { type: 'error', title: 'Failed: CRM sync timeout after retries', ref: 'run_b1e9f652', action: 'Review' }
+];
+
+var CALENDAR_BOOKINGS = {
+  'Alex Rivera': {
+    Mon: [{ name: 'Marta L.', time: '10:00' }, { name: 'Erik J.', time: '14:30' }],
+    Tue: [{ name: 'Anna Ek', time: '09:00' }],
+    Wed: [],
+    Thu: [{ name: 'Lisa B.', time: '11:00' }, { name: 'Marta L.', time: '18:30' }],
+    Fri: [{ name: 'Oscar N.', time: '16:00' }],
+    Sat: [],
+    Sun: []
+  },
+  'Jordan Kim': {
+    Mon: [{ name: 'Sofia D.', time: '11:30' }],
+    Tue: [{ name: 'Jonas L.', time: '10:00' }, { name: 'Maja F.', time: '15:00' }],
+    Wed: [{ name: 'Karl S.', time: '13:00' }],
+    Thu: [],
+    Fri: [{ name: 'Henrik B.', time: '09:30' }],
+    Sat: [{ name: 'Elsa N.', time: '10:00' }],
+    Sun: []
+  },
+  'Sam Park': {
+    Mon: [],
+    Tue: [{ name: 'Gustav H.', time: '14:00' }],
+    Wed: [{ name: 'Ida P.', time: '11:00' }, { name: 'Nils H.', time: '16:30' }],
+    Thu: [{ name: 'Astrid V.', time: '10:00' }],
+    Fri: [],
+    Sat: [],
+    Sun: []
+  }
+};
+
+var DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+var DATES = ['Jul 21', 'Jul 22', 'Jul 23', 'Jul 24', 'Jul 25', 'Jul 26', 'Jul 27'];
+
+// ── SVG Icons (inline) ───────────────────────────────────────────────────────
+function Icon(props) {
+  var paths = {
+    dashboard: 'M3 3h7v7H3V3zm11 0h7v7h-7V3zm0 11h7v7h-7v-7zM3 14h7v7H3v-7z',
+    runs: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9h6m-6 4h6m-6-8h2',
+    calendar: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
+    settings: 'M12 15a3 3 0 100-6 3 3 0 000 6z M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z',
+    chevronLeft: 'M15 18l-6-6 6-6',
+    chevronRight: 'M9 18l6-6-6-6'
+  };
+  return h('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true' },
+    h('path', { d: paths[props.name] })
+  );
+}
+
+// ── Components ────────────────────────────────────────────────────────────────
+
+function Sidebar(props) {
+  var nav = [
+    { key: 'dashboard', label: 'Dashboard', icon: 'dashboard', hash: '#/' },
+    { key: 'runs', label: 'Runs', icon: 'runs', hash: '#/runs' },
+    { key: 'calendar', label: 'Calendar', icon: 'calendar', hash: '#/calendar' },
+    { key: 'settings', label: 'Settings', icon: 'settings', hash: '#/settings' }
+  ];
+  return h('aside', { className: 'sidebar', role: 'navigation', 'aria-label': 'Main navigation' },
+    h('div', { className: 'sidebar-brand' },
+      h('div', { className: 'sidebar-monogram' }, 'K'),
+      h('span', { className: 'sidebar-title' }, 'Kontor')
+    ),
+    h('nav', { className: 'sidebar-nav' },
+      nav.map(function(item) {
+        var isActive = props.current === item.key;
+        return h('button', {
+          key: item.key,
+          className: 'nav-item' + (isActive ? ' active' : ''),
+          onClick: function() { window.location.hash = item.hash; },
+          'aria-current': isActive ? 'page' : undefined,
+          tabIndex: 0
+        }, h(Icon, { name: item.icon }), item.label);
+      })
+    ),
+    h('div', { className: 'sidebar-bottom' },
+      h('div', { className: 'avatar avatar-accent' }, 'SM'),
+      h('div', null,
+        h('div', { className: 'sidebar-user-name' }, 'Sofia Meyer'),
+        h('div', { className: 'sidebar-user-sub' }, 'Salon Nord')
+      )
+    )
+  );
+}
+
+function Topbar(props) {
+  var titles = { dashboard: 'Dashboard', runs: 'Runs', trace: 'Agent Trace', calendar: 'Calendar', settings: 'Settings' };
+  return h('header', { className: 'topbar' },
+    h('div', { className: 'topbar-left' },
+      h('span', { className: 'topbar-title' }, titles[props.current] || 'Dashboard'),
+      h('span', { className: 'topbar-sub' }, 'Salon Nord \u00b7 Last 7 days')
+    ),
+    h('div', { className: 'topbar-right' },
+      h('div', { className: 'range-tabs', role: 'tablist' },
+        ['7d', '30d', 'All'].map(function(r) {
+          return h('button', {
+            key: r, className: 'range-tab' + (r === '7d' ? ' active' : ''),
+            role: 'tab', 'aria-selected': r === '7d' ? 'true' : 'false', tabIndex: 0
+          }, r);
+        })
+      ),
+      h('div', { className: 'avatar avatar-accent' }, 'SM')
+    )
+  );
+}
+
+function Badge(props) {
+  var tone = props.tone || 'neutral';
+  return h('span', { className: 'badge badge-' + tone }, props.children);
+}
+
+function outcomeTone(outcome) {
+  if (outcome === 'success') return 'success';
+  if (outcome === 'escalated') return 'warning';
+  if (outcome === 'failed') return 'error';
+  return 'neutral';
+}
+
+// ── Screen: Dashboard ─────────────────────────────────────────────────────────
+
+function DashboardScreen() {
+  var kpis = [
+    { label: 'Bookings today', value: '12', delta: '+3', deltaDir: 'positive' },
+    { label: 'Total runs', value: '847', delta: '+24', deltaDir: 'positive' },
+    { label: 'Success rate', value: '94.2%', delta: '+1.2%', deltaDir: 'positive' },
+    { label: 'Median latency', value: '2.94s', delta: '-0.3s', deltaDir: 'positive' },
+    { label: 'Escalations', value: '3', delta: '+1', deltaDir: 'negative' },
+    { label: 'Token spend', value: '$12.40', delta: '-$0.80', deltaDir: 'positive' }
+  ];
+
+  return h('div', null,
+    // KPI row
+    h('div', { className: 'kpi-grid' },
+      kpis.map(function(k, i) {
+        return h('div', { key: i, className: 'kpi-card' },
+          h('div', { className: 'kpi-label' }, k.label),
+          h('div', { className: 'kpi-value' }, k.value),
+          h('div', { className: 'kpi-sparkline' },
+            h('svg', { width: '100%', height: 34, 'aria-hidden': 'true' },
+              h('polyline', {
+                points: generateSparkline(i),
+                fill: 'none',
+                stroke: 'var(--viz-1)',
+                strokeWidth: 1.5,
+                strokeLinecap: 'round',
+                strokeLinejoin: 'round'
+              })
+            )
+          ),
+          k.delta ? h('div', { className: 'kpi-delta ' + k.deltaDir }, k.delta) : null
+        );
+      })
+    ),
+    // Charts row
+    h('div', { className: 'charts-row' },
+      h('div', { className: 'chart-card' },
+        h('div', { className: 'chart-title' }, 'Bookings per day'),
+        h('div', { className: 'chart-subtitle' }, 'Last 30 days \u00b7 by channel'),
+        h('svg', { width: '100%', height: 160, viewBox: '0 0 400 160', 'aria-label': 'Bar chart showing bookings per day by channel' },
+          renderBarChart()
+        ),
+        h('div', { className: 'chart-legend' },
+          h('span', { className: 'legend-item' }, h('span', { className: 'legend-dot', style: { background: 'var(--viz-1)' } }), 'Telegram'),
+          h('span', { className: 'legend-item' }, h('span', { className: 'legend-dot', style: { background: 'var(--viz-2)' } }), 'Web widget')
+        )
+      ),
+      h('div', { className: 'chart-card' },
+        h('div', { className: 'chart-title' }, 'Run outcomes'),
+        h('svg', { width: 160, height: 160, viewBox: '0 0 160 160', 'aria-label': 'Donut chart showing run outcomes', style: { display: 'block', margin: '0 auto' } },
+          renderDonut()
+        ),
+        h('div', { className: 'chart-legend', style: { justifyContent: 'center' } },
+          h('span', { className: 'legend-item' }, h('span', { className: 'legend-dot', style: { background: 'var(--viz-1)' } }), 'Completed 75%'),
+          h('span', { className: 'legend-item' }, h('span', { className: 'legend-dot', style: { background: 'var(--viz-4)' } }), 'Escalated 15%'),
+          h('span', { className: 'legend-item' }, h('span', { className: 'legend-dot', style: { background: 'var(--viz-6)' } }), 'Failed 10%')
+        )
+      )
+    ),
+    // Recent runs table + attention panel
+    h('div', { className: 'bottom-row' },
+      h('div', { className: 'data-table-wrap' },
+        h('table', { className: 'data-table' },
+          h('thead', null,
+            h('tr', null,
+              h('th', { scope: 'col' }, 'Run ID'),
+              h('th', { scope: 'col' }, 'Customer'),
+              h('th', { scope: 'col' }, 'Channel'),
+              h('th', { scope: 'col' }, 'Outcome'),
+              h('th', { scope: 'col' }, 'Duration'),
+              h('th', { scope: 'col' }, 'Time')
+            )
+          ),
+          h('tbody', null,
+            RUNS.slice(0, 8).map(function(r) {
+              return h('tr', { key: r.id, role: 'button', tabIndex: 0, onClick: function() { window.location.hash = '#/trace'; }, onKeyDown: function(e) { if (e.key === 'Enter') window.location.hash = '#/trace'; } },
+                h('td', { className: 'mono accent' }, r.id),
+                h('td', null, r.customer),
+                h('td', null, r.channel),
+                h('td', null, h(Badge, { tone: outcomeTone(r.outcome) }, r.outcome)),
+                h('td', { className: 'mono' }, r.duration),
+                h('td', { className: 'mono' }, r.time)
+              );
+            })
+          )
+        )
+      ),
+      h('div', { className: 'attention-panel' },
+        h('div', { className: 'attention-title' }, 'Needs attention'),
+        ATTENTION_ITEMS.map(function(item, i) {
+          return h('div', { key: i, className: 'attention-item' },
+            h('div', { className: 'attention-dot ' + item.type }),
+            h('div', { className: 'attention-body' },
+              h('div', { className: 'attention-item-title' }, item.title),
+              h('div', { className: 'attention-ref' }, item.ref)
+            ),
+            h('button', { className: 'attention-action', onClick: function() { window.location.hash = '#/trace'; } }, item.action)
+          );
+        })
+      )
+    )
+  );
+}
+
+function generateSparkline(seed) {
+  var points = [];
+  var y = 17;
+  for (var i = 0; i < 12; i++) {
+    y = Math.max(4, Math.min(30, y + (Math.sin(seed * 3 + i) * 8)));
+    points.push(Math.round(i * 12) + ',' + Math.round(y));
+  }
+  return points.join(' ');
+}
+
+function renderBarChart() {
+  var bars = [];
+  var barW = 12;
+  var gap = 14;
+  for (var i = 0; i < 15; i++) {
+    var h1 = 30 + Math.round(Math.sin(i * 0.8) * 20 + Math.cos(i * 1.2) * 15);
+    var h2 = 20 + Math.round(Math.cos(i * 1.1) * 15 + Math.sin(i * 0.5) * 10);
+    var x = 20 + i * (barW * 2 + gap);
+    bars.push(h('rect', { key: 'a' + i, x: x, y: 150 - h1, width: barW, height: h1, fill: 'var(--viz-1)', rx: 2 }));
+    bars.push(h('rect', { key: 'b' + i, x: x + barW + 2, y: 150 - h2, width: barW, height: h2, fill: 'var(--viz-2)', rx: 2 }));
+  }
+  return bars;
+}
+
+function renderDonut() {
+  function arc(cx, cy, r, startAngle, endAngle) {
+    var s = startAngle * Math.PI / 180;
+    var e = endAngle * Math.PI / 180;
+    var x1 = cx + r * Math.cos(s), y1 = cy + r * Math.sin(s);
+    var x2 = cx + r * Math.cos(e), y2 = cy + r * Math.sin(e);
+    var large = endAngle - startAngle > 180 ? 1 : 0;
+    return 'M ' + x1 + ' ' + y1 + ' A ' + r + ' ' + r + ' 0 ' + large + ' 1 ' + x2 + ' ' + y2;
+  }
+  var r = 60, cx = 80, cy = 80;
+  return [
+    h('path', { key: 'd1', d: arc(cx, cy, r, 0, 270), fill: 'none', stroke: 'var(--viz-1)', strokeWidth: 20, strokeLinecap: 'round' }),
+    h('path', { key: 'd2', d: arc(cx, cy, r, 274, 328), fill: 'none', stroke: 'var(--viz-4)', strokeWidth: 20, strokeLinecap: 'round' }),
+    h('path', { key: 'd3', d: arc(cx, cy, r, 332, 356), fill: 'none', stroke: 'var(--viz-6)', strokeWidth: 20, strokeLinecap: 'round' })
+  ];
+}
+
+// ── Screen: Runs ──────────────────────────────────────────────────────────────
+
+function RunsScreen() {
+  return h('div', null,
+    h('div', { className: 'data-table-wrap' },
+      h('table', { className: 'data-table' },
+        h('thead', null,
+          h('tr', null,
+            h('th', { scope: 'col' }, 'Run ID'),
+            h('th', { scope: 'col' }, 'Customer'),
+            h('th', { scope: 'col' }, 'Channel'),
+            h('th', { scope: 'col' }, 'Outcome'),
+            h('th', { scope: 'col' }, 'Duration'),
+            h('th', { scope: 'col' }, 'Tokens'),
+            h('th', { scope: 'col' }, 'Time')
+          )
+        ),
+        h('tbody', null,
+          RUNS.map(function(r) {
+            return h('tr', { key: r.id, role: 'button', tabIndex: 0, onClick: function() { window.location.hash = '#/trace'; }, onKeyDown: function(e) { if (e.key === 'Enter') window.location.hash = '#/trace'; } },
+              h('td', { className: 'mono accent' }, r.id),
+              h('td', null, r.customer),
+              h('td', null, r.channel),
+              h('td', null, h(Badge, { tone: outcomeTone(r.outcome) }, r.outcome)),
+              h('td', { className: 'mono' }, r.duration),
+              h('td', { className: 'mono' }, r.tokens.toLocaleString()),
+              h('td', { className: 'mono' }, r.time)
+            );
+          })
+        )
+      )
+    )
+  );
+}
+
+// ── Screen: Trace ─────────────────────────────────────────────────────────────
+
+function TraceScreen() {
+  return h('div', null,
+    // Summary
+    h('div', { className: 'trace-summary' },
+      h('div', { className: 'trace-summary-item' },
+        h('div', { className: 'trace-summary-label' }, 'Run ID'),
+        h('div', { className: 'trace-summary-value' }, 'run_7f3a9c21')
+      ),
+      h('div', { className: 'trace-summary-item' },
+        h('div', { className: 'trace-summary-label' }, 'Duration'),
+        h('div', { className: 'trace-summary-value' }, '2.94s')
+      ),
+      h('div', { className: 'trace-summary-item' },
+        h('div', { className: 'trace-summary-label' }, 'Tokens'),
+        h('div', { className: 'trace-summary-value' }, '3,847')
+      ),
+      h('div', { className: 'trace-summary-item' },
+        h('div', { className: 'trace-summary-label' }, 'Steps'),
+        h('div', { className: 'trace-summary-value' }, '7')
+      ),
+      h('div', { className: 'trace-summary-item' },
+        h('div', { className: 'trace-summary-label' }, 'Outcome'),
+        h(Badge, { tone: 'success' }, 'success')
+      )
+    ),
+    // Key-Value block
+    h('div', { className: 'kv-block' },
+      h('div', { className: 'kv-row' },
+        h('span', { className: 'kv-label' }, 'Customer'),
+        h('span', { className: 'kv-value' }, 'Marta Lindqvist')
+      ),
+      h('div', { className: 'kv-row' },
+        h('span', { className: 'kv-label' }, 'Channel'),
+        h('span', { className: 'kv-value' }, 'Telegram')
+      ),
+      h('div', { className: 'kv-row' },
+        h('span', { className: 'kv-label' }, 'Service'),
+        h('span', { className: 'kv-value' }, 'Haircut')
+      ),
+      h('div', { className: 'kv-row' },
+        h('span', { className: 'kv-label' }, 'Staff'),
+        h('span', { className: 'kv-value' }, 'Alex Rivera')
+      ),
+      h('div', { className: 'kv-row' },
+        h('span', { className: 'kv-label' }, 'Booking ID'),
+        h('span', { className: 'kv-value mono' }, 'bk_8d4f2a91e7c3')
+      )
+    ),
+    // Two-pane layout
+    h('div', { className: 'trace-layout' },
+      // LEFT: Conversation
+      h('div', { className: 'conversation' },
+        MESSAGES.map(function(msg, i) {
+          return h('div', { key: i, className: 'msg' },
+            h('div', { className: 'msg-avatar ' + msg.from }, msg.from === 'user' ? 'ML' : 'AI'),
+            h('div', null,
+              h('div', { className: 'msg-bubble ' + msg.from }, msg.text),
+              h('div', { className: 'msg-time' }, msg.time)
+            )
+          );
+        })
+      ),
+      // RIGHT: Timeline
+      h('div', { className: 'timeline', role: 'list', 'aria-label': 'Agent execution timeline' },
+        TRACE_STEPS.map(function(step) {
+          return h('div', { key: step.id, className: 'timeline-step', role: 'listitem' },
+            h('div', { className: 'timeline-dot ' + step.state }),
+            h('div', { className: 'step-header' },
+              h('span', { className: 'step-time' }, step.t),
+              h('span', { className: 'step-title' }, step.title)
+            ),
+            h('div', { className: 'step-meta' },
+              h('span', { className: 'step-duration' }, step.duration),
+              h('span', { className: 'step-tokens' }, step.tokens + ' tok')
+            ),
+            step.retries ? step.retries.map(function(r, ri) {
+              return h('div', { key: ri, className: 'step-retry' },
+                h('div', { className: 'step-retry-label' }, 'Attempt ' + r.attempt + ' \u2014 ' + r.state),
+                h('div', { style: { fontSize: 'var(--fs-caption)', color: 'var(--text-tertiary)' } }, r.detail),
+                h('div', { className: 'step-duration' }, r.duration)
+              );
+            }) : null
+          );
+        })
+      )
+    )
+  );
+}
+
+// ── Screen: Calendar ──────────────────────────────────────────────────────────
+
+function CalendarScreen() {
+  var staffNames = Object.keys(CALENDAR_BOOKINGS);
+
+  return h('div', null,
+    h('div', { className: 'calendar-header' },
+      h('button', { className: 'calendar-nav', 'aria-label': 'Previous week', tabIndex: 0 }, h(Icon, { name: 'chevronLeft' })),
+      h('h2', null, 'Week of Jul 21, 2026'),
+      h('button', { className: 'calendar-nav', 'aria-label': 'Next week', tabIndex: 0 }, h(Icon, { name: 'chevronRight' }))
+    ),
+    h('div', { className: 'calendar-grid', role: 'grid', 'aria-label': 'Weekly calendar' },
+      // Header row
+      h('div', { className: 'cal-header-cell' }),
+      DAYS.map(function(day, i) {
+        return h('div', { key: day, className: 'cal-header-cell' }, day + ' ' + DATES[i]);
+      }),
+      // Staff rows
+      staffNames.map(function(staff) {
+        var cells = [];
+        cells.push(h('div', { key: staff + '-name', className: 'cal-staff-cell' }, staff));
+        DAYS.forEach(function(day, di) {
+          var bookings = CALENDAR_BOOKINGS[staff][day] || [];
+          var isThursday = day === 'Thu';
+          cells.push(h('div', { key: staff + '-' + day, className: 'cal-day-cell' },
+            bookings.map(function(bk, bi) {
+              return h('div', { key: bi, className: 'cal-booking' },
+                h('div', { className: 'cal-booking-name' }, bk.name),
+                h('div', { className: 'cal-booking-time' }, bk.time)
+              );
+            }),
+            // Current-time indicator on Thursday
+            isThursday && staff === 'Alex Rivera' ? h('div', { className: 'cal-now-line' }) : null
+          ));
+        });
+        return cells;
+      })
+    )
+  );
+}
+
+// ── Screen: Settings (placeholder) ───────────────────────────────────────────
+
+function SettingsScreen() {
+  return h('div', { style: { padding: 'var(--space-8)', textAlign: 'center', color: 'var(--text-tertiary)' } },
+    h('div', { style: { fontSize: 'var(--fs-h2)', fontWeight: 'var(--fw-semibold)', color: 'var(--text-primary)', marginBottom: 'var(--space-3)' } }, 'Settings'),
+    h('p', null, 'Workspace and agent configuration will appear here.')
+  );
+}
+
+// ── Router & App ──────────────────────────────────────────────────────────────
+
+function getRoute() {
+  var hash = window.location.hash || '#/';
+  if (hash === '#/' || hash === '#/dashboard') return 'dashboard';
+  if (hash === '#/runs') return 'runs';
+  if (hash.indexOf('#/trace') === 0) return 'trace';
+  if (hash === '#/calendar') return 'calendar';
+  if (hash === '#/settings') return 'settings';
+  return 'dashboard';
+}
+
+function App() {
+  var routeState = React.useState(getRoute());
+  var route = routeState[0];
+  var setRoute = routeState[1];
+
+  React.useEffect(function() {
+    function onHash() { setRoute(getRoute()); }
+    window.addEventListener('hashchange', onHash);
+    return function() { window.removeEventListener('hashchange', onHash); };
+  }, []);
+
+  var screen;
+  switch (route) {
+    case 'runs': screen = h(RunsScreen); break;
+    case 'trace': screen = h(TraceScreen); break;
+    case 'calendar': screen = h(CalendarScreen); break;
+    case 'settings': screen = h(SettingsScreen); break;
+    default: screen = h(DashboardScreen);
+  }
+
+  return h('div', { className: 'app-shell' },
+    h(Sidebar, { current: route }),
+    h('div', { className: 'main-area' },
+      h(Topbar, { current: route }),
+      h('main', { className: 'content', role: 'main' }, screen)
+    )
+  );
+}
+
+// ── Mount ─────────────────────────────────────────────────────────────────────
+ReactDOM.createRoot(document.getElementById('root')).render(h(App));
+</script>
+</body>
+</html>

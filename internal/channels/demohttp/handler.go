@@ -17,6 +17,7 @@ import (
 	"github.com/reinhlord/kontor/internal/app"
 	"github.com/reinhlord/kontor/internal/conversations"
 	"github.com/reinhlord/kontor/internal/platform/ids"
+	"github.com/reinhlord/kontor/web/operator"
 	"github.com/reinhlord/kontor/web/widget"
 )
 
@@ -56,6 +57,11 @@ func New(application applicationService, trace traceReader, pool readinessChecke
 	mux.HandleFunc("GET /api/v1/demo/runs/{runID}", h.getRun)
 	mux.HandleFunc("GET /widget/v1/kontor.js", serveStatic("text/javascript; charset=utf-8", widget.Script))
 	mux.HandleFunc("GET /widget/v1/demo", serveStatic("text/html; charset=utf-8", widget.DemoPage))
+
+	// Operator console (Stage 3)
+	mux.HandleFunc("GET /operator", serveStatic("text/html; charset=utf-8", operator.IndexPage))
+	mux.HandleFunc("GET /operator/ds/styles.css", serveStatic("text/css; charset=utf-8", operator.DSStyles))
+	mux.HandleFunc("GET /operator/ds/bundle.js", serveStatic("text/javascript; charset=utf-8", operator.DSBundle))
 	return h.recover(mux)
 }
 

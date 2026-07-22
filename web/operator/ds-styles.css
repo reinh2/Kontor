@@ -1,0 +1,369 @@
+/* Webfonts — self-hosted, variable, subset-split for latin/latin-ext.
+   DROP-IN REQUIRED: the four files below are not yet in the project — see
+   readme.md "Fonts to install" for exact filenames + where to get them.
+   Until they're added, text falls back to the system sans/mono stack. */
+
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../assets/fonts/geist-variable-latin.woff2') format('woff2-variations'),
+       url('../assets/fonts/geist-variable-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../assets/fonts/geist-variable-latin-ext.woff2') format('woff2-variations'),
+       url('../assets/fonts/geist-variable-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../assets/fonts/geist-mono-variable-latin.woff2') format('woff2-variations'),
+       url('../assets/fonts/geist-mono-variable-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../assets/fonts/geist-mono-variable-latin-ext.woff2') format('woff2-variations'),
+       url('../assets/fonts/geist-mono-variable-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* ============================================================
+   COLORS — Kontor & DocMind
+   Dark theme is the default (:root). Light theme is a variant
+   applied via [data-theme="light"]. Depth comes from surface
+   tone + 1px borders, never heavy shadow.
+   ============================================================ */
+
+:root {
+  /* --- Base neutral ramp (deep blue-grey, never pure black) --- */
+  --grey-950: #0a0d12;
+  --grey-925: #0d1117;
+  --grey-900: #10141b;
+  --grey-850: #141922;
+  --grey-800: #1a2029;
+  --grey-750: #202733;
+  --grey-700: #2a323f;
+  --grey-600: #3a4453;
+  --grey-500: #55606f;
+  --grey-400: #737f8f;
+  --grey-300: #98a2b0;
+  --grey-200: #c2c9d3;
+  --grey-100: #e3e7ec;
+  --grey-050: #f4f6f8;
+
+  /* --- Accent (single) — "Iris", a calm periwinkle-indigo --- */
+  --iris-100: #e7e9ff;
+  --iris-200: #c7ccff;
+  --iris-300: #a3abff;
+  --iris-400: #8a92ff;
+  --iris-500: #6e78f0;
+  --iris-600: #5b64d6;
+  --iris-700: #474fb0;
+  --iris-050: #f2f3ff;
+
+  /* --- Semantic hues (base) --- */
+  --green-500: #3fb95a;
+  --green-600: #2f9448;
+  --green-100: #d6f5df;
+  --amber-500: #e3b341;
+  --amber-600: #c8951f;
+  --amber-100: #fbeecb;
+  --red-500: #f0616d;
+  --red-600: #d84450;
+  --red-100: #fbdcdf;
+
+  /* ---------- SEMANTIC ALIASES (dark, default) ---------- */
+  /* Backgrounds & surfaces (rising tone = rising elevation) */
+  --bg-base: var(--grey-950);
+  --surface-1: var(--grey-900);
+  --surface-2: var(--grey-850);
+  --surface-3: var(--grey-800);
+  --surface-hover: var(--grey-750);
+  --surface-inset: var(--grey-925);
+
+  /* Borders (1px is the depth cue) */
+  --border-subtle: #1e2530;
+  --border-default: #29313d;
+  --border-strong: #3a4453;
+  --border-focus: var(--iris-500);
+
+  /* Text */
+  --text-primary: #edf0f4;
+  --text-secondary: #a4adba;
+  --text-tertiary: #767f8e;
+  --text-disabled: #4a525f;
+  --text-inverse: #0a0d12;
+  --text-accent: var(--iris-400);
+  --text-on-accent: #ffffff;
+
+  /* Accent roles */
+  --accent: var(--iris-500);
+  --accent-hover: var(--iris-400);
+  --accent-active: var(--iris-600);
+  --accent-subtle: color-mix(in oklab, var(--iris-500) 14%, transparent);
+  --accent-border: color-mix(in oklab, var(--iris-500) 40%, transparent);
+  --focus-ring: color-mix(in oklab, var(--iris-500) 45%, transparent);
+
+  /* Status: success / warning / error / neutral / info */
+  --status-success-fg: #5fd07a;
+  --status-success-bg: color-mix(in oklab, var(--green-500) 16%, transparent);
+  --status-success-border: color-mix(in oklab, var(--green-500) 38%, transparent);
+
+  --status-warning-fg: #edc257;
+  --status-warning-bg: color-mix(in oklab, var(--amber-500) 16%, transparent);
+  --status-warning-border: color-mix(in oklab, var(--amber-500) 38%, transparent);
+
+  --status-error-fg: #f47883;
+  --status-error-bg: color-mix(in oklab, var(--red-500) 16%, transparent);
+  --status-error-border: color-mix(in oklab, var(--red-500) 40%, transparent);
+
+  --status-neutral-fg: var(--grey-300);
+  --status-neutral-bg: color-mix(in oklab, var(--grey-400) 14%, transparent);
+  --status-neutral-border: var(--border-default);
+
+  --status-info-fg: var(--iris-400);
+  --status-info-bg: var(--accent-subtle);
+  --status-info-border: var(--accent-border);
+
+  /* Skeleton loading */
+  --skeleton-base: var(--grey-800);
+  --skeleton-shine: var(--grey-700);
+
+  /* Data-viz sequence (calm, cool-leaning) */
+  --viz-1: var(--iris-400);
+  --viz-2: #56b7c9;
+  --viz-3: #5fd07a;
+  --viz-4: #edc257;
+  --viz-5: #b98cff;
+  --viz-6: #f47883;
+
+  color-scheme: dark;
+}
+
+/* ---------- LIGHT THEME VARIANT ---------- */
+[data-theme="light"] {
+  --bg-base: #ffffff;
+  --surface-1: #ffffff;
+  --surface-2: #f7f8fa;
+  --surface-3: #eef0f4;
+  --surface-hover: #eaecf1;
+  --surface-inset: #f4f6f8;
+
+  --border-subtle: #ecedf1;
+  --border-default: #e0e3e9;
+  --border-strong: #cdd2db;
+  --border-focus: var(--iris-500);
+
+  --text-primary: #131720;
+  --text-secondary: #565f6d;
+  --text-tertiary: #656e7c;
+  --text-disabled: #b3bac4;
+  --text-inverse: #ffffff;
+  --text-accent: var(--iris-600);
+  --text-on-accent: #ffffff;
+
+  --accent: var(--iris-500);
+  --accent-hover: var(--iris-600);
+  --accent-active: var(--iris-700);
+  --accent-subtle: color-mix(in oklab, var(--iris-500) 10%, transparent);
+  --accent-border: color-mix(in oklab, var(--iris-500) 28%, transparent);
+  --focus-ring: color-mix(in oklab, var(--iris-500) 35%, transparent);
+
+  --status-success-fg: var(--green-600);
+  --status-success-bg: color-mix(in oklab, var(--green-500) 12%, white);
+  --status-success-border: color-mix(in oklab, var(--green-500) 32%, transparent);
+
+  --status-warning-fg: var(--amber-600);
+  --status-warning-bg: color-mix(in oklab, var(--amber-500) 14%, white);
+  --status-warning-border: color-mix(in oklab, var(--amber-500) 34%, transparent);
+
+  --status-error-fg: var(--red-600);
+  --status-error-bg: color-mix(in oklab, var(--red-500) 10%, white);
+  --status-error-border: color-mix(in oklab, var(--red-500) 32%, transparent);
+
+  --status-neutral-fg: var(--grey-500);
+  --status-neutral-bg: var(--grey-050);
+  --status-neutral-border: var(--border-default);
+
+  --status-info-fg: var(--iris-600);
+  --status-info-bg: var(--accent-subtle);
+  --status-info-border: var(--accent-border);
+
+  --skeleton-base: #eceef2;
+  --skeleton-shine: #f6f7f9;
+
+  color-scheme: light;
+}
+/* ============================================================
+   TYPOGRAPHY — one variable grotesk + one monospace.
+   Strict scale, tight negative tracking on large headings.
+   ============================================================ */
+:root {
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', monospace;
+
+  /* Weights */
+  --fw-regular: 400; /* @kind font */
+  --fw-medium: 500; /* @kind font */
+  --fw-semibold: 600; /* @kind font */
+  --fw-bold: 700; /* @kind font */
+
+  /* Type scale (rem, 16px root) */
+  --fs-display-2xl: 4.5rem;   /* 72 — hero landing */
+  --fs-display-xl: 3.5rem;    /* 56 */
+  --fs-display-lg: 2.75rem;   /* 44 */
+  --fs-h1: 2rem;              /* 32 */
+  --fs-h2: 1.5rem;           /* 24 */
+  --fs-h3: 1.25rem;          /* 20 */
+  --fs-h4: 1.0625rem;        /* 17 */
+  --fs-body-lg: 1rem;        /* 16 */
+  --fs-body: 0.9375rem;      /* 15 — app default */
+  --fs-body-sm: 0.8125rem;   /* 13 */
+  --fs-caption: 0.75rem;     /* 12 */
+  --fs-micro: 0.6875rem;     /* 11 — labels, table headers */
+
+  /* Line heights */
+  --lh-tight: 1.05; /* @kind font */
+  --lh-snug: 1.2; /* @kind font */
+  --lh-normal: 1.5; /* @kind font */
+  --lh-relaxed: 1.65; /* @kind font */
+
+  /* Letter spacing — negative tightens large display type */
+  --ls-tighter: -0.03em;
+  --ls-tight: -0.02em;
+  --ls-normal: -0.005em;
+  --ls-wide: 0.02em;
+  --ls-caps: 0.06em;   /* uppercase micro-labels */
+}
+
+/* Convenience text roles (opt-in helper classes) */
+.kk-display { font-family: var(--font-sans); font-weight: var(--fw-semibold); font-size: var(--fs-display-xl); line-height: var(--lh-tight); letter-spacing: var(--ls-tighter); color: var(--text-primary); }
+.kk-h1 { font-family: var(--font-sans); font-weight: var(--fw-semibold); font-size: var(--fs-h1); line-height: var(--lh-snug); letter-spacing: var(--ls-tight); color: var(--text-primary); }
+.kk-h2 { font-family: var(--font-sans); font-weight: var(--fw-semibold); font-size: var(--fs-h2); line-height: var(--lh-snug); letter-spacing: var(--ls-tight); color: var(--text-primary); }
+.kk-body { font-family: var(--font-sans); font-weight: var(--fw-regular); font-size: var(--fs-body); line-height: var(--lh-normal); color: var(--text-secondary); }
+.kk-mono { font-family: var(--font-mono); font-weight: var(--fw-regular); font-size: var(--fs-body-sm); letter-spacing: 0; font-feature-settings: 'ss01', 'zero'; }
+.kk-eyebrow { font-family: var(--font-sans); font-weight: var(--fw-medium); font-size: var(--fs-micro); letter-spacing: var(--ls-caps); text-transform: uppercase; color: var(--text-tertiary); }
+/* ============================================================
+   SPACING — 4px base grid. Dense (Linear-like) but not cramped.
+   ============================================================ */
+:root {
+  --space-0: 0;
+  --space-px: 1px;
+  --space-0-5: 0.125rem; /* 2 */
+  --space-1: 0.25rem;    /* 4 */
+  --space-1-5: 0.375rem; /* 6 */
+  --space-2: 0.5rem;     /* 8 */
+  --space-2-5: 0.625rem; /* 10 */
+  --space-3: 0.75rem;    /* 12 */
+  --space-4: 1rem;       /* 16 */
+  --space-5: 1.25rem;    /* 20 */
+  --space-6: 1.5rem;     /* 24 */
+  --space-8: 2rem;       /* 32 */
+  --space-10: 2.5rem;    /* 40 */
+  --space-12: 3rem;      /* 48 */
+  --space-16: 4rem;      /* 64 */
+  --space-20: 5rem;      /* 80 */
+  --space-24: 6rem;      /* 96 */
+  --space-32: 8rem;      /* 128 */
+
+  /* Layout constants */
+  --sidebar-width: 240px;
+  --sidebar-width-collapsed: 56px;
+  --topbar-height: 52px;
+  --container-max: 1200px;
+  --content-max: 720px;
+}
+/* ============================================================
+   RADIUS & ELEVATION — moderate radii, near-flat.
+   Depth = surface tone + 1px border, not shadow.
+   ============================================================ */
+:root {
+  --radius-none: 0;
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 7px;   /* default control radius */
+  --radius-lg: 10px;  /* cards, panels */
+  --radius-xl: 14px;  /* large surfaces */
+  --radius-2xl: 20px;
+  --radius-full: 9999px;
+
+  /* Shadows — deliberately minimal. Used only for overlays that
+     float above the plane (menus, dialogs, toasts). */
+  --shadow-none: none;
+  --shadow-sm: 0 1px 2px rgba(3, 6, 12, 0.28);
+  --shadow-overlay: 0 8px 24px -6px rgba(3, 6, 12, 0.5), 0 2px 6px rgba(3, 6, 12, 0.35);
+  --shadow-focus: 0 0 0 3px var(--focus-ring);
+
+  /* Hairline used everywhere for depth */
+  --hairline: 1px solid var(--border-default);
+  --hairline-subtle: 1px solid var(--border-subtle);
+}
+/* ============================================================
+   MOTION — restrained. State changes only, 150–250ms ease-out.
+   Always respects prefers-reduced-motion.
+   ============================================================ */
+:root {
+  --dur-instant: 80ms; /* @kind other */
+  --dur-fast: 150ms; /* @kind other */
+  --dur-base: 200ms; /* @kind other */
+  --dur-slow: 250ms; /* @kind other */
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1); /* @kind other */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* @kind other */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1); /* @kind other */
+
+  --transition-colors: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); /* @kind other */
+  --transition-transform: transform var(--dur-base) var(--ease-out); /* @kind other */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* ============================================================
+   BASE — light document reset + defaults. Keeps app + specimen
+   cards consistent. Applies the sans font and base surface.
+   ============================================================ */
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: var(--accent-subtle); color: var(--text-primary); }
+
+a { color: var(--text-accent); text-decoration: none; transition: var(--transition-colors); }
+a:hover { color: var(--accent-hover); }
+
+code, kbd, samp, pre { font-family: var(--font-mono); }
+
+*:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Thin, calm scrollbars */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: var(--radius-full); border: 3px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--grey-600); }
