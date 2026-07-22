@@ -13,35 +13,52 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/reinhlord/kontor/internal/agenttrace"
+	"github.com/reinhlord/kontor/internal/platform/ids"
+	"github.com/reinhlord/kontor/internal/scheduling"
 )
 
 type traceReader interface {
 	GetRun(context.Context, string) (agenttrace.RunTrace, error)
 }
 
-// PostgreSQL is the tenant-scoped read model for the operator console.
+// bookingCommander is the narrow admin-write surface the operator console needs
+// from the scheduling repository. It is intentionally separate from the
+// customer-facing tools.Gateway so operator writes carry an 'admin' audit
+// actor, an optimistic version check, and transactional reminder updates.
+type bookingCommander interface {
+	AdminCreateBooking(context.Context, scheduling.AdminCreateBookingRequest) (scheduling.CreateBookingResult, error)
+	AdminRescheduleBooking(context.Context, scheduling.AdminRescheduleBookingRequest) (scheduling.RescheduleBookingResult, error)
+	AdminCancelBooking(context.Context, scheduling.AdminCancelBookingRequest) (scheduling.CancelBookingResult, error)
+}
+
+// PostgreSQL is the tenant-scoped read model for the operator console, plus the
+// admin-write commands that delegate to the scheduling repository.
 type PostgreSQL struct {
 	pool     *pgxpool.Pool
 	trace    traceReader
+	commands bookingCommander
 	tenantID string
 	timezone string
 	location *time.Location
 	now      func() time.Time
 }
 
-func NewPostgreSQL(pool *pgxpool.Pool, trace traceReader, tenantID, timezone string) (*PostgreSQL, error) {
+func NewPostgreSQL(pool *pgxpool.Pool, trace traceReader, commands bookingCommander, tenantID, timezone string) (*PostgreSQL, error) {
 	if pool == nil {
 		return nil, errors.New("operator postgres: nil pool")
 	}
 	if trace == nil {
 		return nil, errors.New("operator postgres: nil trace reader")
 	}
+	if commands == nil {
+		return nil, errors.New("operator postgres: nil booking commander")
+	}
 	location, err := time.LoadLocation(timezone)
 	if err != nil {
 		return nil, fmt.Errorf("operator postgres: invalid timezone %q: %w", timezone, err)
 	}
 	return &PostgreSQL{
-		pool: pool, trace: trace, tenantID: tenantID, timezone: timezone,
+		pool: pool, trace: trace, commands: commands, tenantID: tenantID, timezone: timezone,
 		location: location, now: time.Now,
 	}, nil
 }
@@ -484,9 +501,138 @@ func decodeRunCursor(encoded string) (runCursor, error) {
 	return cursor, nil
 }
 
+// ListCustomers backs the operator console's create-booking customer picker.
+// An empty query returns the first page of customers ordered by name.
+func (s *PostgreSQL) ListCustomers(ctx context.Context, request CustomerListRequest) (CustomerList, error) {
+	limit := request.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	query := strings.TrimSpace(request.Query)
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text,display_name,COALESCE(email,''),COALESCE(phone,'')
+		FROM customers
+		WHERE tenant_id=$1
+		  AND ($2='' OR display_name ILIKE '%'||$2||'%'
+		       OR email ILIKE '%'||$2||'%' OR phone ILIKE '%'||$2||'%')
+		ORDER BY display_name,id
+		LIMIT $3`, s.tenantID, query, limit)
+	if err != nil {
+		return CustomerList{}, fmt.Errorf("list operator customers: %w", err)
+	}
+	defer rows.Close()
+	var result CustomerList
+	for rows.Next() {
+		var item Customer
+		if err := rows.Scan(&item.ID, &item.DisplayName, &item.Email, &item.Phone); err != nil {
+			return CustomerList{}, fmt.Errorf("scan operator customer: %w", err)
+		}
+		result.Items = append(result.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return CustomerList{}, fmt.Errorf("operator customer rows: %w", err)
+	}
+	result.Items = nonNil(result.Items)
+	return result, nil
+}
+
 func nonNil[T any](items []T) []T {
 	if items == nil {
 		return []T{}
 	}
 	return items
+}
+
+// CreateBooking places an operator-created booking and returns the fully
+// joined calendar projection. A missing idempotency key is generated so a
+// single logical create is safe to retry at the transport layer.
+func (s *PostgreSQL) CreateBooking(ctx context.Context, command CreateBookingCommand) (Booking, error) {
+	result, err := s.commands.AdminCreateBooking(ctx, scheduling.AdminCreateBookingRequest{
+		CustomerID:     command.CustomerID,
+		ServiceID:      command.ServiceID,
+		StaffID:        command.StaffID,
+		StartsAt:       command.StartsAt,
+		Notes:          command.Notes,
+		ActorRef:       "operator",
+		IdempotencyKey: orGeneratedKey(command.IdempotencyKey),
+	})
+	if err != nil {
+		return Booking{}, mapCommandError(err)
+	}
+	return s.bookingByID(ctx, result.Booking.ID)
+}
+
+// RescheduleBooking moves a booking, enforcing the optimistic version the
+// operator loaded it at.
+func (s *PostgreSQL) RescheduleBooking(ctx context.Context, command RescheduleBookingCommand) (Booking, error) {
+	result, err := s.commands.AdminRescheduleBooking(ctx, scheduling.AdminRescheduleBookingRequest{
+		BookingID:       command.BookingID,
+		ExpectedVersion: command.ExpectedVersion,
+		NewStartsAt:     command.StartsAt,
+		ActorRef:        "operator",
+		IdempotencyKey:  orGeneratedKey(command.IdempotencyKey),
+	})
+	if err != nil {
+		return Booking{}, mapCommandError(err)
+	}
+	return s.bookingByID(ctx, result.Booking.ID)
+}
+
+// CancelBooking cancels a booking, enforcing the optimistic version the
+// operator loaded it at.
+func (s *PostgreSQL) CancelBooking(ctx context.Context, command CancelBookingCommand) (Booking, error) {
+	result, err := s.commands.AdminCancelBooking(ctx, scheduling.AdminCancelBookingRequest{
+		BookingID:       command.BookingID,
+		ExpectedVersion: command.ExpectedVersion,
+		Reason:          command.Reason,
+		ActorRef:        "operator",
+		IdempotencyKey:  orGeneratedKey(command.IdempotencyKey),
+	})
+	if err != nil {
+		return Booking{}, mapCommandError(err)
+	}
+	return s.bookingByID(ctx, result.Booking.ID)
+}
+
+func (s *PostgreSQL) bookingByID(ctx context.Context, bookingID string) (Booking, error) {
+	bookings, err := s.listBookings(ctx, `b.id = $2`, bookingID)
+	if err != nil {
+		return Booking{}, err
+	}
+	if len(bookings) == 0 {
+		return Booking{}, ErrBookingNotFound
+	}
+	return bookings[0], nil
+}
+
+func orGeneratedKey(key string) string {
+	if key != "" {
+		return key
+	}
+	return "op-" + ids.New()
+}
+
+// mapCommandError translates scheduling-domain errors into the operatorhttp
+// sentinels the HTTP layer maps to problem responses. Unknown errors are
+// returned unchanged and surface as an internal error.
+func mapCommandError(err error) error {
+	switch {
+	case errors.Is(err, scheduling.ErrScheduleVersionConflict):
+		return ErrVersionConflict
+	case errors.Is(err, scheduling.ErrNotFound):
+		return ErrBookingNotFound
+	case errors.Is(err, scheduling.ErrSlotUnavailable):
+		return ErrSlotUnavailable
+	case errors.Is(err, scheduling.ErrBookingStateConflict):
+		return ErrBookingStateConflict
+	case errors.Is(err, scheduling.ErrIdempotencyConflict):
+		return ErrBookingStateConflict
+	case errors.Is(err, scheduling.ErrInvalidInput):
+		return ErrInvalidCommand
+	default:
+		return err
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/reinhlord/kontor/db/migrations"
 	"github.com/reinhlord/kontor/internal/agenttrace"
 	"github.com/reinhlord/kontor/internal/platform/database"
+	"github.com/reinhlord/kontor/internal/scheduling"
 )
 
 const (
@@ -53,7 +54,8 @@ func TestPostgreSQLOperatorReadModel(t *testing.T) {
 	fixedNow := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
 	seedOperatorReadModel(t, ctx, pool, fixedNow)
 	traceStore := agenttrace.NewStore(pool, operatorTestTenant)
-	store, err := NewPostgreSQL(pool, traceStore, operatorTestTenant, "Europe/Berlin")
+	commands := scheduling.NewPGXRepository(pool, operatorTestTenant)
+	store, err := NewPostgreSQL(pool, traceStore, commands, operatorTestTenant, "Europe/Berlin")
 	if err != nil {
 		t.Fatalf("construct operator postgres: %v", err)
 	}
@@ -195,6 +197,28 @@ func TestPostgreSQLOperatorReadModel(t *testing.T) {
 		}
 	})
 
+	t.Run("customers are tenant scoped and searchable", func(t *testing.T) {
+		all, err := store.ListCustomers(ctx, CustomerListRequest{})
+		if err != nil {
+			t.Fatalf("list customers: %v", err)
+		}
+		for _, item := range all.Items {
+			if item.ID == operatorOtherCustomer {
+				t.Fatalf("cross-tenant customer leaked into list: %#v", item)
+			}
+		}
+		if len(all.Items) < 2 {
+			t.Fatalf("customers = %#v, want at least the two operator-tenant fixtures", all.Items)
+		}
+		filtered, err := store.ListCustomers(ctx, CustomerListRequest{Query: "Alice"})
+		if err != nil {
+			t.Fatalf("search customers: %v", err)
+		}
+		if len(filtered.Items) != 1 || filtered.Items[0].ID != operatorCustomerAlice {
+			t.Fatalf("filtered customers = %#v", filtered.Items)
+		}
+	})
+
 	t.Run("read methods do not mutate runtime tables", func(t *testing.T) {
 		before := operatorWriteSnapshot(t, ctx, pool)
 		if _, err := store.Dashboard(ctx, DashboardRequest{Days: 7}); err != nil {
@@ -208,6 +232,9 @@ func TestPostgreSQLOperatorReadModel(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := store.GetRun(ctx, operatorRunNewest); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.ListCustomers(ctx, CustomerListRequest{}); err != nil {
 			t.Fatal(err)
 		}
 		location, err := time.LoadLocation("Europe/Berlin")

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/reinhlord/kontor/internal/jobqueue"
 )
 
 const createBookingScope = "booking.create.v1"
@@ -369,34 +370,8 @@ func (r *PGXRepository) createBookingOnce(ctx context.Context, request CreateBoo
 	}
 	// Transactionally enqueue reminder and CRM jobs so they are guaranteed to
 	// execute if and only if the booking commits.
-	reminderPayload, _ := json.Marshal(map[string]string{
-		"customer_name":  request.CustomerID,
-		"customer_email": "",
-		"service_name":   service.Name,
-		"staff_name":     member.DisplayName,
-		"starts_at":      request.StartsAt.Format(time.RFC3339),
-		"timezone":       member.Timezone,
-	})
-	crmPayload, _ := json.Marshal(map[string]string{
-		"customer_id":  request.CustomerID,
-		"display_name": request.CustomerID,
-	})
-	for _, job := range []struct {
-		jobType        string
-		payload        []byte
-		idempotencyKey string
-	}{
-		{"send_reminder", reminderPayload, "reminder:" + booking.ID},
-		{"crm_upsert_contact", crmPayload, "crm_upsert:" + booking.ID},
-	} {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO jobs (tenant_id, booking_id, job_type, payload_json, max_attempts, idempotency_key)
-			VALUES ($1, $2, $3, $4::jsonb, 5, $5)
-			ON CONFLICT (tenant_id, idempotency_key)
-			WHERE idempotency_key IS NOT NULL DO NOTHING`,
-			r.tenantID, booking.ID, job.jobType, string(job.payload), job.idempotencyKey); err != nil {
-			return CreateBookingResult{}, fmt.Errorf("enqueue %s job: %w", job.jobType, err)
-		}
+	if err := r.enqueueBookingCreatedJobs(ctx, tx, booking, service.Name, member.DisplayName, member.Timezone); err != nil {
+		return CreateBookingResult{}, err
 	}
 	response, err := json.Marshal(CreateBookingResult{Booking: booking})
 	if err != nil {
@@ -679,6 +654,558 @@ func (r *PGXRepository) CancelBooking(ctx context.Context, request CancelBooking
 	return CancelBookingResult{Booking: cancelled}, nil
 }
 
+// enqueueBookingCreatedJobs transactionally enqueues the reminder and CRM jobs
+// spawned by a newly created booking. It is shared by the customer agent path
+// and the operator (admin) path so both produce an identical outbox.
+func (r *PGXRepository) enqueueBookingCreatedJobs(ctx context.Context, tx pgx.Tx, booking Booking, serviceName, staffName, staffTimezone string) error {
+	reminderPayload, _ := json.Marshal(map[string]string{
+		"customer_name":  booking.CustomerID,
+		"customer_email": "",
+		"service_name":   serviceName,
+		"staff_name":     staffName,
+		"starts_at":      booking.StartsAt.Format(time.RFC3339),
+		"timezone":       staffTimezone,
+	})
+	crmPayload, _ := json.Marshal(map[string]string{
+		"customer_id":  booking.CustomerID,
+		"display_name": booking.CustomerID,
+	})
+	for _, job := range []struct {
+		jobType        string
+		payload        []byte
+		idempotencyKey string
+	}{
+		{"send_reminder", reminderPayload, "reminder:" + booking.ID},
+		{"crm_upsert_contact", crmPayload, "crm_upsert:" + booking.ID},
+	} {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jobs (tenant_id, booking_id, job_type, payload_json, max_attempts, idempotency_key)
+			VALUES ($1, $2, $3, $4::jsonb, 5, $5)
+			ON CONFLICT (tenant_id, idempotency_key)
+			WHERE idempotency_key IS NOT NULL DO NOTHING`,
+			r.tenantID, booking.ID, job.jobType, string(job.payload), job.idempotencyKey); err != nil {
+			return fmt.Errorf("enqueue %s job: %w", job.jobType, err)
+		}
+	}
+	return nil
+}
+
+// AdminCreateBookingRequest contains the trusted, operator-supplied inputs for
+// a console-created booking. Unlike the customer path there is no conversation
+// or signed slot token: the operator is a trusted human placing an appointment
+// directly, so the availability grid is deliberately not re-imposed. Hard
+// double-booking is still prevented by the PostgreSQL exclusion constraint.
+type AdminCreateBookingRequest struct {
+	CustomerID     string
+	ServiceID      string
+	StaffID        string
+	StartsAt       time.Time
+	Notes          string
+	ActorRef       string
+	IdempotencyKey string
+}
+
+// AdminRescheduleBookingRequest moves an existing booking to NewStartsAt. It
+// requires ExpectedVersion so a stale operator view cannot overwrite a change
+// made in the meantime (optimistic concurrency).
+type AdminRescheduleBookingRequest struct {
+	BookingID       string
+	ExpectedVersion int
+	NewStartsAt     time.Time
+	ActorRef        string
+	IdempotencyKey  string
+}
+
+// AdminCancelBookingRequest cancels an existing booking. ExpectedVersion is
+// required for the same optimistic-concurrency reason as reschedule.
+type AdminCancelBookingRequest struct {
+	BookingID       string
+	ExpectedVersion int
+	Reason          string
+	ActorRef        string
+	IdempotencyKey  string
+}
+
+const (
+	adminCreateScope     = "booking.admin_create.v1"
+	adminRescheduleScope = "booking.admin_reschedule.v1"
+	actorTypeAdmin       = "admin"
+)
+
+// AdminCreateBooking creates a booking on behalf of an operator, recording an
+// 'admin' actor in the audit trail and enqueuing the same reminder/CRM outbox
+// as the customer path. It is serialized per staff local date and guarded by
+// the exclusion constraint exactly like CreateBooking.
+func (r *PGXRepository) AdminCreateBooking(ctx context.Context, request AdminCreateBookingRequest) (CreateBookingResult, error) {
+	if r == nil || r.pool == nil {
+		return CreateBookingResult{}, fmt.Errorf("scheduling repository: nil pool")
+	}
+	if request.CustomerID == "" || request.ServiceID == "" || request.StaffID == "" || request.StartsAt.IsZero() {
+		return CreateBookingResult{}, fmt.Errorf("%w: customer, service, staff, and start are required", ErrInvalidInput)
+	}
+	if len(request.Notes) > 500 {
+		return CreateBookingResult{}, fmt.Errorf("%w: notes exceed 500 bytes", ErrInvalidInput)
+	}
+	if length := len(request.IdempotencyKey); length < 16 || length > 128 {
+		return CreateBookingResult{}, fmt.Errorf("%w: idempotency key length must be 16..128", ErrInvalidInput)
+	}
+	actorRef := request.ActorRef
+	if actorRef == "" {
+		actorRef = "operator"
+	}
+	requestHash, err := hashAdminCreateBooking(request)
+	if err != nil {
+		return CreateBookingResult{}, err
+	}
+	var result CreateBookingResult
+	for attempt := 1; attempt <= 3; attempt++ {
+		result, err = r.adminCreateBookingOnce(ctx, request, actorRef, requestHash)
+		if err == nil {
+			return result, nil
+		}
+		if !isTransactionRetry(err) || attempt == 3 {
+			return CreateBookingResult{}, mapDatabaseError(err)
+		}
+		select {
+		case <-ctx.Done():
+			return CreateBookingResult{}, ctx.Err()
+		case <-time.After(time.Duration(attempt*10) * time.Millisecond):
+		}
+	}
+	return CreateBookingResult{}, mapDatabaseError(err)
+}
+
+func (r *PGXRepository) adminCreateBookingOnce(ctx context.Context, request AdminCreateBookingRequest, actorRef, requestHash string) (CreateBookingResult, error) {
+	idempotencyScope := adminCreateScope + ":" + request.CustomerID
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return CreateBookingResult{}, fmt.Errorf("begin admin booking transaction: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	command, err := tx.Exec(ctx, `
+		INSERT INTO idempotency_records
+		    (tenant_id, scope, idempotency_key, request_hash, status)
+		VALUES ($1, $2, $3, $4, 'in_progress')
+		ON CONFLICT (tenant_id, scope, idempotency_key) DO NOTHING`,
+		r.tenantID, idempotencyScope, request.IdempotencyKey, requestHash)
+	if err != nil {
+		return CreateBookingResult{}, fmt.Errorf("reserve idempotency key: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		var storedHash, status, resourceID string
+		err = tx.QueryRow(ctx, `
+			SELECT request_hash, status, COALESCE(resource_id::text, '')
+			FROM idempotency_records
+			WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3
+			FOR UPDATE`, r.tenantID, idempotencyScope, request.IdempotencyKey).
+			Scan(&storedHash, &status, &resourceID)
+		if err != nil {
+			return CreateBookingResult{}, fmt.Errorf("read idempotency key: %w", err)
+		}
+		if storedHash != requestHash {
+			return CreateBookingResult{}, ErrIdempotencyConflict
+		}
+		if status != "completed" || resourceID == "" {
+			return CreateBookingResult{}, fmt.Errorf("idempotency record is unexpectedly incomplete")
+		}
+		booking, loadErr := loadBooking(ctx, tx, r.tenantID, resourceID)
+		if loadErr != nil {
+			return CreateBookingResult{}, loadErr
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return CreateBookingResult{}, fmt.Errorf("commit idempotency replay: %w", err)
+		}
+		return CreateBookingResult{Booking: booking, Replayed: true}, nil
+	}
+
+	service, member, err := r.loadBookingInputs(ctx, tx, request.ServiceID, request.StaffID)
+	if err != nil {
+		return CreateBookingResult{}, err
+	}
+	location, err := time.LoadLocation(member.Timezone)
+	if err != nil {
+		return CreateBookingResult{}, fmt.Errorf("%w: stored staff timezone %q: %v", ErrInvalidInput, member.Timezone, err)
+	}
+	endsAt := request.StartsAt.Add(service.Duration)
+	lockDates := touchedLocalDates(
+		request.StartsAt.Add(-service.BufferBefore),
+		endsAt.Add(service.BufferAfter),
+		location,
+	)
+	if err := r.acquireScheduleLocks(ctx, tx, request.StaffID, lockDates); err != nil {
+		return CreateBookingResult{}, err
+	}
+	var stillFuture bool
+	if err := tx.QueryRow(ctx, `SELECT $1::timestamptz > clock_timestamp()`, request.StartsAt).Scan(&stillFuture); err != nil {
+		return CreateBookingResult{}, fmt.Errorf("recheck booking start time: %w", err)
+	}
+	if !stillFuture {
+		return CreateBookingResult{}, ErrSlotUnavailable
+	}
+	// The operator override deliberately skips the availability engine (working
+	// hours, breaks): a trusted human may place an out-of-grid appointment. The
+	// exclusion constraint below is still the final guard against overlap.
+
+	var booking Booking
+	err = tx.QueryRow(ctx, `
+		INSERT INTO bookings (
+		    tenant_id, customer_id, conversation_id, service_id, staff_id,
+		    starts_at, ends_at, buffer_before_minutes, buffer_after_minutes, notes
+		) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id::text, customer_id::text, COALESCE(conversation_id::text, ''),
+		          service_id::text, staff_id::text, status, starts_at, ends_at,
+		          buffer_before_minutes, buffer_after_minutes, schedule_version,
+		          notes, created_at, updated_at`,
+		r.tenantID, request.CustomerID, request.ServiceID, request.StaffID,
+		request.StartsAt, endsAt, minutes(service.BufferBefore), minutes(service.BufferAfter), request.Notes).
+		Scan(&booking.ID, &booking.CustomerID, &booking.ConversationID, &booking.ServiceID, &booking.StaffID,
+			&booking.Status, &booking.StartsAt, &booking.EndsAt, &booking.BufferBeforeMinutes,
+			&booking.BufferAfterMinutes, &booking.ScheduleVersion, &booking.Notes, &booking.CreatedAt, &booking.UpdatedAt)
+	if err != nil {
+		return CreateBookingResult{}, fmt.Errorf("insert booking: %w", err)
+	}
+
+	state, err := json.Marshal(booking)
+	if err != nil {
+		return CreateBookingResult{}, fmt.Errorf("encode booking event: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO booking_events
+		    (tenant_id, booking_id, event_type, actor_type, actor_ref, to_state)
+		VALUES ($1, $2, 'created', $3, $4, $5::jsonb)`,
+		r.tenantID, booking.ID, actorTypeAdmin, actorRef, string(state)); err != nil {
+		return CreateBookingResult{}, fmt.Errorf("insert booking event: %w", err)
+	}
+	if err := r.enqueueBookingCreatedJobs(ctx, tx, booking, service.Name, member.DisplayName, member.Timezone); err != nil {
+		return CreateBookingResult{}, err
+	}
+	response, err := json.Marshal(CreateBookingResult{Booking: booking})
+	if err != nil {
+		return CreateBookingResult{}, fmt.Errorf("encode idempotency response: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE idempotency_records
+		SET status = 'completed', resource_id = $4, response_json = $5::jsonb, completed_at = now()
+		WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3`,
+		r.tenantID, idempotencyScope, request.IdempotencyKey, booking.ID, string(response)); err != nil {
+		return CreateBookingResult{}, fmt.Errorf("complete idempotency key: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return CreateBookingResult{}, fmt.Errorf("commit admin booking: %w", err)
+	}
+	return CreateBookingResult{Booking: booking}, nil
+}
+
+// AdminRescheduleBooking moves a booking to a new start time on behalf of an
+// operator. It verifies ExpectedVersion under a row lock, keeps the original
+// staff/service/duration, records an 'admin' audit event, and transactionally
+// moves the pending reminder to the new time.
+func (r *PGXRepository) AdminRescheduleBooking(ctx context.Context, request AdminRescheduleBookingRequest) (RescheduleBookingResult, error) {
+	if r == nil || r.pool == nil {
+		return RescheduleBookingResult{}, fmt.Errorf("scheduling repository: nil pool")
+	}
+	if request.BookingID == "" || request.NewStartsAt.IsZero() {
+		return RescheduleBookingResult{}, fmt.Errorf("%w: booking_id and new start are required", ErrInvalidInput)
+	}
+	if request.ExpectedVersion <= 0 {
+		return RescheduleBookingResult{}, fmt.Errorf("%w: expected_version must be positive", ErrInvalidInput)
+	}
+	if length := len(request.IdempotencyKey); length < 16 || length > 128 {
+		return RescheduleBookingResult{}, fmt.Errorf("%w: idempotency key length must be 16..128", ErrInvalidInput)
+	}
+	actorRef := request.ActorRef
+	if actorRef == "" {
+		actorRef = "operator"
+	}
+	var result RescheduleBookingResult
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		result, err = r.adminRescheduleBookingOnce(ctx, request, actorRef)
+		if err == nil {
+			return result, nil
+		}
+		if !isTransactionRetry(err) || attempt == 3 {
+			return RescheduleBookingResult{}, mapDatabaseError(err)
+		}
+		select {
+		case <-ctx.Done():
+			return RescheduleBookingResult{}, ctx.Err()
+		case <-time.After(time.Duration(attempt*10) * time.Millisecond):
+		}
+	}
+	return RescheduleBookingResult{}, mapDatabaseError(err)
+}
+
+func (r *PGXRepository) adminRescheduleBookingOnce(ctx context.Context, request AdminRescheduleBookingRequest, actorRef string) (RescheduleBookingResult, error) {
+	idempotencyScope := adminRescheduleScope + ":" + request.BookingID
+	requestHash := fmt.Sprintf("reschedule:%s:%s", request.BookingID, request.NewStartsAt.UTC().Format(time.RFC3339Nano))
+
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return RescheduleBookingResult{}, fmt.Errorf("begin admin reschedule transaction: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	reserved, err := tx.Exec(ctx, `
+		INSERT INTO idempotency_records (tenant_id, scope, idempotency_key, request_hash, status)
+		VALUES ($1, $2, $3, $4, 'in_progress')
+		ON CONFLICT (tenant_id, scope, idempotency_key) DO NOTHING`,
+		r.tenantID, idempotencyScope, request.IdempotencyKey, requestHash)
+	if err != nil {
+		return RescheduleBookingResult{}, fmt.Errorf("reserve idempotency key: %w", err)
+	}
+	if reserved.RowsAffected() == 0 {
+		var storedHash, status, resourceID string
+		if err := tx.QueryRow(ctx, `
+			SELECT request_hash, status, COALESCE(resource_id::text, '')
+			FROM idempotency_records
+			WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3
+			FOR UPDATE`, r.tenantID, idempotencyScope, request.IdempotencyKey).
+			Scan(&storedHash, &status, &resourceID); err != nil {
+			return RescheduleBookingResult{}, fmt.Errorf("read idempotency key: %w", err)
+		}
+		if storedHash != requestHash {
+			return RescheduleBookingResult{}, ErrIdempotencyConflict
+		}
+		if status != "completed" || resourceID == "" {
+			return RescheduleBookingResult{}, fmt.Errorf("idempotency record is unexpectedly incomplete")
+		}
+		booking, loadErr := loadBooking(ctx, tx, r.tenantID, resourceID)
+		if loadErr != nil {
+			return RescheduleBookingResult{}, loadErr
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return RescheduleBookingResult{}, fmt.Errorf("commit idempotency replay: %w", err)
+		}
+		return RescheduleBookingResult{Booking: booking, Replayed: true}, nil
+	}
+
+	current, err := loadBookingForUpdate(ctx, tx, r.tenantID, request.BookingID)
+	if err != nil {
+		return RescheduleBookingResult{}, err
+	}
+	if current.ScheduleVersion != request.ExpectedVersion {
+		return RescheduleBookingResult{}, ErrScheduleVersionConflict
+	}
+	if current.Status != "confirmed" {
+		return RescheduleBookingResult{}, ErrBookingStateConflict
+	}
+	newEndsAt := request.NewStartsAt.Add(current.EndsAt.Sub(current.StartsAt))
+
+	var staffTimezone string
+	if err := tx.QueryRow(ctx, `
+		SELECT timezone FROM staff WHERE tenant_id = $1 AND id = $2`,
+		r.tenantID, current.StaffID).Scan(&staffTimezone); err != nil {
+		return RescheduleBookingResult{}, fmt.Errorf("load staff timezone: %w", err)
+	}
+	location, err := time.LoadLocation(staffTimezone)
+	if err != nil {
+		location = time.UTC
+	}
+	lockDates := touchedLocalDates(
+		request.NewStartsAt.Add(-time.Duration(current.BufferBeforeMinutes)*time.Minute),
+		newEndsAt.Add(time.Duration(current.BufferAfterMinutes)*time.Minute),
+		location,
+	)
+	if err := r.acquireScheduleLocks(ctx, tx, current.StaffID, lockDates); err != nil {
+		return RescheduleBookingResult{}, err
+	}
+
+	var updated Booking
+	err = tx.QueryRow(ctx, `
+		UPDATE bookings
+		SET starts_at = $1, ends_at = $2, schedule_version = schedule_version + 1, updated_at = now()
+		WHERE tenant_id = $3 AND id = $4 AND status = 'confirmed'
+		RETURNING id::text, customer_id::text, COALESCE(conversation_id::text, ''),
+		          service_id::text, staff_id::text, status, starts_at, ends_at,
+		          buffer_before_minutes, buffer_after_minutes, schedule_version,
+		          notes, created_at, updated_at`,
+		request.NewStartsAt, newEndsAt, r.tenantID, request.BookingID).
+		Scan(&updated.ID, &updated.CustomerID, &updated.ConversationID, &updated.ServiceID, &updated.StaffID,
+			&updated.Status, &updated.StartsAt, &updated.EndsAt, &updated.BufferBeforeMinutes,
+			&updated.BufferAfterMinutes, &updated.ScheduleVersion, &updated.Notes, &updated.CreatedAt, &updated.UpdatedAt)
+	if err != nil {
+		return RescheduleBookingResult{}, fmt.Errorf("update booking: %w", err)
+	}
+
+	fromState, _ := json.Marshal(current)
+	toState, _ := json.Marshal(updated)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO booking_events (tenant_id, booking_id, event_type, actor_type, actor_ref, from_state, to_state)
+		VALUES ($1, $2, 'rescheduled', $3, $4, $5::jsonb, $6::jsonb)`,
+		r.tenantID, updated.ID, actorTypeAdmin, actorRef, string(fromState), string(toState)); err != nil {
+		return RescheduleBookingResult{}, fmt.Errorf("insert reschedule event: %w", err)
+	}
+	if _, err := jobqueue.UpdateReminderSchedule(ctx, tx, r.tenantID, updated.ID, updated.StartsAt, staffTimezone); err != nil {
+		return RescheduleBookingResult{}, err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE idempotency_records
+		SET status = 'completed', resource_id = $4, completed_at = now()
+		WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3`,
+		r.tenantID, idempotencyScope, request.IdempotencyKey, updated.ID); err != nil {
+		return RescheduleBookingResult{}, fmt.Errorf("complete idempotency key: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return RescheduleBookingResult{}, fmt.Errorf("commit admin reschedule: %w", err)
+	}
+	return RescheduleBookingResult{Booking: updated}, nil
+}
+
+// AdminCancelBooking cancels a booking on behalf of an operator. It verifies
+// ExpectedVersion under a row lock, records an 'admin' audit event, and
+// transactionally cancels the booking's still-pending reminder so it never
+// fires for a cancelled appointment.
+func (r *PGXRepository) AdminCancelBooking(ctx context.Context, request AdminCancelBookingRequest) (CancelBookingResult, error) {
+	if r == nil || r.pool == nil {
+		return CancelBookingResult{}, fmt.Errorf("scheduling repository: nil pool")
+	}
+	if request.BookingID == "" || request.Reason == "" {
+		return CancelBookingResult{}, fmt.Errorf("%w: booking_id and reason are required", ErrInvalidInput)
+	}
+	if request.ExpectedVersion <= 0 {
+		return CancelBookingResult{}, fmt.Errorf("%w: expected_version must be positive", ErrInvalidInput)
+	}
+	if len(request.Reason) > 500 {
+		return CancelBookingResult{}, fmt.Errorf("%w: reason exceeds 500 bytes", ErrInvalidInput)
+	}
+	if length := len(request.IdempotencyKey); length < 16 || length > 128 {
+		return CancelBookingResult{}, fmt.Errorf("%w: idempotency key length must be 16..128", ErrInvalidInput)
+	}
+	actorRef := request.ActorRef
+	if actorRef == "" {
+		actorRef = "operator"
+	}
+	var result CancelBookingResult
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		result, err = r.adminCancelBookingOnce(ctx, request, actorRef)
+		if err == nil {
+			return result, nil
+		}
+		if !isTransactionRetry(err) || attempt == 3 {
+			return CancelBookingResult{}, mapDatabaseError(err)
+		}
+		select {
+		case <-ctx.Done():
+			return CancelBookingResult{}, ctx.Err()
+		case <-time.After(time.Duration(attempt*10) * time.Millisecond):
+		}
+	}
+	return CancelBookingResult{}, mapDatabaseError(err)
+}
+
+func (r *PGXRepository) adminCancelBookingOnce(ctx context.Context, request AdminCancelBookingRequest, actorRef string) (CancelBookingResult, error) {
+	// Cancellation is naturally idempotent: an already-cancelled booking short
+	// circuits below, and the optimistic version check rejects a stale retry
+	// against a booking that changed. No idempotency_records row is needed.
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return CancelBookingResult{}, fmt.Errorf("begin admin cancel transaction: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	current, err := loadBookingForUpdate(ctx, tx, r.tenantID, request.BookingID)
+	if err != nil {
+		return CancelBookingResult{}, err
+	}
+	if current.Status == "cancelled" {
+		// Cancelling an already-cancelled booking is idempotent; the desired end
+		// state is reached regardless of the expected version.
+		if err := tx.Commit(ctx); err != nil {
+			return CancelBookingResult{}, fmt.Errorf("commit already-cancelled: %w", err)
+		}
+		return CancelBookingResult{Booking: current, Replayed: true}, nil
+	}
+	if current.ScheduleVersion != request.ExpectedVersion {
+		return CancelBookingResult{}, ErrScheduleVersionConflict
+	}
+	if current.Status != "confirmed" {
+		return CancelBookingResult{}, ErrBookingStateConflict
+	}
+
+	var cancelled Booking
+	err = tx.QueryRow(ctx, `
+		UPDATE bookings
+		SET status = 'cancelled', cancellation_reason = $1, cancelled_at = now(),
+		    schedule_version = schedule_version + 1, updated_at = now()
+		WHERE tenant_id = $2 AND id = $3 AND status = 'confirmed'
+		RETURNING id::text, customer_id::text, COALESCE(conversation_id::text, ''),
+		          service_id::text, staff_id::text, status, starts_at, ends_at,
+		          buffer_before_minutes, buffer_after_minutes, schedule_version,
+		          notes, created_at, updated_at`,
+		request.Reason, r.tenantID, request.BookingID).
+		Scan(&cancelled.ID, &cancelled.CustomerID, &cancelled.ConversationID, &cancelled.ServiceID, &cancelled.StaffID,
+			&cancelled.Status, &cancelled.StartsAt, &cancelled.EndsAt, &cancelled.BufferBeforeMinutes,
+			&cancelled.BufferAfterMinutes, &cancelled.ScheduleVersion, &cancelled.Notes, &cancelled.CreatedAt, &cancelled.UpdatedAt)
+	if err != nil {
+		return CancelBookingResult{}, fmt.Errorf("cancel booking: %w", err)
+	}
+
+	fromState, _ := json.Marshal(current)
+	toState, _ := json.Marshal(cancelled)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO booking_events (tenant_id, booking_id, event_type, actor_type, actor_ref, from_state, to_state)
+		VALUES ($1, $2, 'cancelled', $3, $4, $5::jsonb, $6::jsonb)`,
+		r.tenantID, cancelled.ID, actorTypeAdmin, actorRef, string(fromState), string(toState)); err != nil {
+		return CancelBookingResult{}, fmt.Errorf("insert cancel event: %w", err)
+	}
+	if _, err := jobqueue.CancelBookingJobs(ctx, tx, r.tenantID, cancelled.ID, "send_reminder"); err != nil {
+		return CancelBookingResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return CancelBookingResult{}, fmt.Errorf("commit admin cancel: %w", err)
+	}
+	return CancelBookingResult{Booking: cancelled}, nil
+}
+
+func hashAdminCreateBooking(request AdminCreateBookingRequest) (string, error) {
+	canonical := struct {
+		CustomerID string `json:"customer_id"`
+		ServiceID  string `json:"service_id"`
+		StaffID    string `json:"staff_id"`
+		StartsAt   string `json:"starts_at"`
+		Notes      string `json:"notes,omitempty"`
+	}{
+		CustomerID: request.CustomerID, ServiceID: request.ServiceID, StaffID: request.StaffID,
+		StartsAt: request.StartsAt.UTC().Format(time.RFC3339Nano), Notes: request.Notes,
+	}
+	encoded, err := json.Marshal(canonical)
+	if err != nil {
+		return "", fmt.Errorf("encode idempotency request: %w", err)
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+// loadBookingForUpdate loads a booking row locked FOR UPDATE, scoped only by
+// tenant: operators may act on any booking in the tenant, unlike the
+// customer path which additionally scopes by owner.
+func loadBookingForUpdate(ctx context.Context, tx pgx.Tx, tenantID, bookingID string) (Booking, error) {
+	var booking Booking
+	err := tx.QueryRow(ctx, `
+		SELECT id::text, customer_id::text, COALESCE(conversation_id::text, ''),
+		       service_id::text, staff_id::text, status, starts_at, ends_at,
+		       buffer_before_minutes, buffer_after_minutes, schedule_version,
+		       notes, created_at, updated_at
+		FROM bookings
+		WHERE tenant_id = $1 AND id = $2
+		FOR UPDATE`, tenantID, bookingID).
+		Scan(&booking.ID, &booking.CustomerID, &booking.ConversationID, &booking.ServiceID, &booking.StaffID,
+			&booking.Status, &booking.StartsAt, &booking.EndsAt, &booking.BufferBeforeMinutes,
+			&booking.BufferAfterMinutes, &booking.ScheduleVersion, &booking.Notes, &booking.CreatedAt, &booking.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Booking{}, ErrNotFound
+	}
+	if err != nil {
+		return Booking{}, fmt.Errorf("load booking for update: %w", err)
+	}
+	return booking, nil
+}
+
 func (r *PGXRepository) acquireScheduleLocks(ctx context.Context, tx pgx.Tx, staffID string, localDates []string) error {
 	// touchedLocalDates is ascending. All writers use that order, preventing a
 	// cross-midnight booking from deadlocking another writer on the next day.
@@ -959,7 +1486,8 @@ func isTransactionRetry(err error) bool {
 
 func mapDatabaseError(err error) error {
 	if errors.Is(err, ErrInvalidInput) || errors.Is(err, ErrNotFound) ||
-		errors.Is(err, ErrSlotUnavailable) || errors.Is(err, ErrIdempotencyConflict) {
+		errors.Is(err, ErrSlotUnavailable) || errors.Is(err, ErrIdempotencyConflict) ||
+		errors.Is(err, ErrBookingStateConflict) || errors.Is(err, ErrScheduleVersionConflict) {
 		return err
 	}
 	var pgErr *pgconn.PgError

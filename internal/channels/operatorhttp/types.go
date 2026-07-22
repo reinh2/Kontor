@@ -5,6 +5,7 @@ package operatorhttp
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/reinhlord/kontor/internal/agenttrace"
@@ -178,10 +179,66 @@ type ScheduleBlock struct {
 	Note     string    `json:"note,omitempty"`
 }
 
+// CreateBookingCommand is the operator-supplied input for creating a booking
+// directly from the console.
+type CreateBookingCommand struct {
+	CustomerID     string
+	ServiceID      string
+	StaffID        string
+	StartsAt       time.Time
+	Notes          string
+	IdempotencyKey string
+}
+
+// RescheduleBookingCommand moves a booking to a new start time. ExpectedVersion
+// is the optimistic-concurrency guard the operator loaded the booking at.
+type RescheduleBookingCommand struct {
+	BookingID       string
+	ExpectedVersion int
+	StartsAt        time.Time
+	IdempotencyKey  string
+}
+
+// CancelBookingCommand cancels a booking. ExpectedVersion is the optimistic
+// guard, as for reschedule.
+type CancelBookingCommand struct {
+	BookingID       string
+	ExpectedVersion int
+	Reason          string
+	IdempotencyKey  string
+}
+
+// Command failures the HTTP layer maps to problem responses. The PostgreSQL
+// backend translates scheduling-domain errors into these so the handler never
+// depends on the scheduling package.
+var (
+	ErrInvalidCommand       = errors.New("operator command is invalid")
+	ErrBookingNotFound      = errors.New("booking not found")
+	ErrVersionConflict      = errors.New("schedule version conflict")
+	ErrSlotUnavailable      = errors.New("slot is no longer available")
+	ErrBookingStateConflict = errors.New("booking state conflict")
+)
+
+// CustomerListRequest searches the tenant's customers for the create-booking
+// picker. An empty query returns the first page ordered by name.
+type CustomerListRequest struct {
+	Query string
+	Limit int
+}
+
+// CustomerList is the customer picker payload.
+type CustomerList struct {
+	Items []Customer `json:"items"`
+}
+
 // Backend keeps the HTTP/auth boundary testable without PostgreSQL.
 type Backend interface {
 	Dashboard(context.Context, DashboardRequest) (Dashboard, error)
 	ListRuns(context.Context, ListRunsRequest) (RunPage, error)
 	GetRun(context.Context, string) (RunDetail, error)
 	Calendar(context.Context, CalendarRequest) (Calendar, error)
+	ListCustomers(context.Context, CustomerListRequest) (CustomerList, error)
+	CreateBooking(context.Context, CreateBookingCommand) (Booking, error)
+	RescheduleBooking(context.Context, RescheduleBookingCommand) (Booking, error)
+	CancelBooking(context.Context, CancelBookingCommand) (Booking, error)
 }

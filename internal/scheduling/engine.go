@@ -18,11 +18,15 @@ const (
 )
 
 var (
-	ErrInvalidInput        = errors.New("invalid scheduling input")
-	ErrNotFound            = errors.New("scheduling resource not found")
-	ErrSlotUnavailable     = errors.New("slot is no longer available")
-	ErrIdempotencyConflict = errors.New("idempotency key was used with different arguments")
+	ErrInvalidInput         = errors.New("invalid scheduling input")
+	ErrNotFound             = errors.New("scheduling resource not found")
+	ErrSlotUnavailable      = errors.New("slot is no longer available")
+	ErrIdempotencyConflict  = errors.New("idempotency key was used with different arguments")
 	ErrBookingStateConflict = errors.New("booking is not in a state that allows this operation")
+	// ErrScheduleVersionConflict is returned when an optimistic-lock caller
+	// (the operator console) supplies an expected schedule_version that no
+	// longer matches the persisted booking, meaning it changed underneath them.
+	ErrScheduleVersionConflict = errors.New("booking schedule version does not match the expected version")
 )
 
 // RuleKind distinguishes bookable hours from recurring breaks. Rules use the

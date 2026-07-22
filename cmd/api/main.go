@@ -21,6 +21,7 @@ import (
 	"github.com/reinhlord/kontor/internal/platform/database"
 	"github.com/reinhlord/kontor/internal/platform/httpx"
 	"github.com/reinhlord/kontor/internal/platform/logging"
+	"github.com/reinhlord/kontor/internal/scheduling"
 )
 
 func main() {
@@ -93,8 +94,9 @@ func run() error {
 	limiter := httpx.NewRateLimiter(cfg.HTTP.RateLimitPerMinute, cfg.HTTP.RateLimitBurst)
 	var operatorHandler http.Handler
 	if cfg.Operator.AdminToken != "" {
+		operatorCommands := scheduling.NewPGXRepository(pool, cfg.Tenant.ID)
 		operatorStore, err := operatorhttp.NewPostgreSQL(
-			pool, components.Trace, cfg.Tenant.ID, cfg.Tenant.Timezone,
+			pool, components.Trace, operatorCommands, cfg.Tenant.ID, cfg.Tenant.Timezone,
 		)
 		if err != nil {
 			return err

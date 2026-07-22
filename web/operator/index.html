@@ -194,7 +194,7 @@
     details.cal-booking { display: block; }
     .cal-booking summary { cursor: pointer; list-style: none; }
     .cal-booking summary::-webkit-details-marker { display: none; }
-    .cal-booking:focus-within { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+    .cal-booking:focus-within, .cal-booking:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
     .cal-booking-detail { padding-top: var(--space-1); color: var(--text-secondary); line-height: 1.4; }
     .cal-block { padding: var(--space-1-5) var(--space-2); margin-bottom: var(--space-1); border: 1px dashed var(--border-default); border-radius: var(--radius-sm); color: var(--text-tertiary); background: var(--surface-2); font-size: var(--fs-micro); }
     .mobile-nav { display: none; gap: var(--space-1); padding: var(--space-2); overflow-x: auto; border-bottom: 1px solid var(--border-subtle); background: var(--surface-1); }
@@ -291,6 +291,45 @@ async function fetchJSON(path, signal) {
     throw requestError;
   }
   return body;
+}
+
+async function sendJSON(method, path, payload) {
+  var token = storedToken();
+  var response;
+  try {
+    response = await window.fetch(API_BASE + path, {
+      method: method,
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: 'Bearer ' + token },
+      cache: 'no-store',
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    var networkError = new Error('Kontor could not reach the operator API.');
+    networkError.cause = error;
+    throw networkError;
+  }
+
+  var body = null;
+  var text = await response.text();
+  if (text) {
+    try { body = JSON.parse(text); }
+    catch (_) { body = { detail: 'The server returned an unreadable response.' }; }
+  }
+  if (!response.ok) {
+    var requestError = new Error((body && (body.detail || body.title)) || ('HTTP ' + response.status));
+    requestError.status = response.status;
+    requestError.problem = body;
+    if (response.status === 401) window.dispatchEvent(new Event('kontor:operator-unauthorized'));
+    throw requestError;
+  }
+  return body;
+}
+
+function randomIdempotencyKey() {
+  var bytes = new Uint8Array(16);
+  if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes);
+  else for (var i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
 }
 
 function usePollingResource(key, loader, pollInterval, enabled) {
@@ -455,6 +494,54 @@ function startOfWeek(value) {
 
 function formatDateKey(value, options) {
   return new Intl.DateTimeFormat(undefined, Object.assign({ timeZone: 'UTC', month: 'short', day: 'numeric' }, options || {})).format(parseDateKey(value));
+}
+
+// tzOffsetMinutes returns the minutes such that (local wall time) = (UTC instant) + offset,
+// for the given timezone at the given instant. Used to convert an operator's
+// wall-clock input into the correct UTC instant without a date library.
+function tzOffsetMinutes(date, timezone) {
+  try {
+    var dtf = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+    var parts = dtf.formatToParts(date);
+    var map = {};
+    parts.forEach(function(part) { if (part.type !== 'literal') map[part.type] = part.value; });
+    var hour = map.hour === '24' ? '00' : map.hour;
+    var asUTC = Date.UTC(Number(map.year), Number(map.month) - 1, Number(map.day), Number(hour), Number(map.minute), Number(map.second));
+    return (asUTC - date.getTime()) / 60000;
+  } catch (_) { return 0; }
+}
+
+// zonedTimeToUtcISOString converts an operator-entered wall-clock date and time
+// in the tenant's timezone into an RFC3339 UTC instant, resolving the offset
+// with one refinement pass so the result is correct across a DST transition.
+function zonedTimeToUtcISOString(dateValue, timeValue, timezone) {
+  var dateBits = String(dateValue).split('-').map(Number);
+  var timeBits = String(timeValue).split(':').map(Number);
+  var naiveUTC = Date.UTC(dateBits[0], dateBits[1] - 1, dateBits[2], timeBits[0] || 0, timeBits[1] || 0, 0);
+  var offset = tzOffsetMinutes(new Date(naiveUTC), timezone);
+  var actual = new Date(naiveUTC - offset * 60000);
+  var offset2 = tzOffsetMinutes(actual, timezone);
+  if (offset2 !== offset) actual = new Date(naiveUTC - offset2 * 60000);
+  return actual.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+// instantToZonedFields converts an RFC3339 instant into the {date, time} wall-clock
+// values an operator would see in the given timezone, for pre-filling a form.
+function instantToZonedFields(instant, timezone) {
+  var date = new Date(instant);
+  var dtf = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false
+  });
+  var parts = dtf.formatToParts(date);
+  var map = {};
+  parts.forEach(function(part) { if (part.type !== 'literal') map[part.type] = part.value; });
+  var hour = map.hour === '24' ? '00' : map.hour;
+  return { date: map.year + '-' + map.month + '-' + map.day, time: hour + ':' + map.minute };
 }
 
 // ── SVG Icons (inline) ───────────────────────────────────────────────────────
@@ -1145,6 +1232,265 @@ function bookingBorder(status) {
   return 'var(--accent)';
 }
 
+// CustomerPicker is a searchable, debounced select over /operator/customers,
+// used only by the create-booking form. It keeps its own small result cache
+// so retyping a recent query does not re-hit the network.
+function CustomerPicker(props) {
+  var queryPair = React.useState('');
+  var query = queryPair[0];
+  var setQuery = queryPair[1];
+  var itemsPair = React.useState([]);
+  var items = itemsPair[0];
+  var setItems = itemsPair[1];
+  var openPair = React.useState(false);
+  var open = openPair[0];
+  var setOpen = openPair[1];
+
+  React.useEffect(function() {
+    var active = true;
+    var timer = window.setTimeout(function() {
+      fetchJSON('/customers?q=' + encodeURIComponent(query) + '&limit=10')
+        .then(function(result) { if (active) setItems((result && result.items) || []); })
+        .catch(function() { if (active) setItems([]); });
+    }, 200);
+    return function() { active = false; window.clearTimeout(timer); };
+  }, [query]);
+
+  function choose(customer) {
+    props.onChange(customer);
+    setQuery(customer.display_name);
+    setOpen(false);
+  }
+
+  return h('div', { className: 'field', style: { position: 'relative' } },
+    h('label', { htmlFor: 'booking-customer' }, 'Customer'),
+    h('input', {
+      id: 'booking-customer', type: 'text', autoComplete: 'off', value: query,
+      placeholder: 'Search by name, email, or phone',
+      onChange: function(event) {
+        setQuery(event.target.value);
+        setOpen(true);
+        if (props.value) props.onChange(null);
+      },
+      onFocus: function() { setOpen(true); },
+      'aria-expanded': open && items.length ? 'true' : 'false',
+      'aria-autocomplete': 'list'
+    }),
+    open && items.length ? h('ul', {
+      role: 'listbox', 'aria-label': 'Matching customers',
+      style: {
+        position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20, margin: '4px 0 0', padding: '4px',
+        listStyle: 'none', background: 'var(--surface-2)', border: '1px solid var(--border-default)',
+        borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-overlay)', maxHeight: 220, overflowY: 'auto'
+      }
+    }, items.map(function(customer) {
+      return h('li', { key: customer.id, role: 'option' },
+        h('button', {
+          type: 'button',
+          style: { display: 'block', width: '100%', textAlign: 'left', padding: '6px 8px', border: 0, background: 'none', color: 'var(--text-primary)', cursor: 'pointer', borderRadius: 'var(--radius-sm)' },
+          onClick: function() { choose(customer); }
+        }, customer.display_name + ' \u00b7 ' + (customer.email || customer.phone || ''))
+      );
+    })) : null
+  );
+}
+
+// BookingCommandModal handles all three operator write commands: creating a
+// walk-in booking, rescheduling one to a new time, or cancelling it with a
+// reason. It converts wall-clock input in the tenant's timezone to the
+// RFC3339 UTC instants the API expects, and surfaces a 409 schedule-version
+// conflict with an explicit "reload and retry" affordance rather than a
+// generic error, since the operator's view is now known to be stale.
+function BookingCommandModal(props) {
+  var mode = props.mode; // 'create' | 'reschedule' | 'cancel'
+  var booking = props.booking || null;
+  var seed = mode === 'reschedule' && booking ? instantToZonedFields(booking.starts_at, props.timezone) : { date: '', time: '' };
+
+  var customerPair = React.useState(null);
+  var customer = customerPair[0];
+  var setCustomer = customerPair[1];
+  var serviceIDPair = React.useState((props.services && props.services[0] && props.services[0].id) || '');
+  var serviceID = serviceIDPair[0];
+  var setServiceID = serviceIDPair[1];
+  var staffIDPair = React.useState(props.staffID || (props.staff && props.staff[0] && props.staff[0].id) || '');
+  var staffID = staffIDPair[0];
+  var setStaffID = staffIDPair[1];
+  var datePair = React.useState(props.date || seed.date);
+  var dateValue = datePair[0];
+  var setDateValue = datePair[1];
+  var timePair = React.useState(seed.time);
+  var timeValue = timePair[0];
+  var setTimeValue = timePair[1];
+  var notesPair = React.useState('');
+  var notes = notesPair[0];
+  var setNotes = notesPair[1];
+  var reasonPair = React.useState('');
+  var reason = reasonPair[0];
+  var setReason = reasonPair[1];
+  var busyPair = React.useState(false);
+  var busy = busyPair[0];
+  var setBusy = busyPair[1];
+  var errorPair = React.useState('');
+  var error = errorPair[0];
+  var setError = errorPair[1];
+  var conflictPair = React.useState(false);
+  var conflict = conflictPair[0];
+  var setConflict = conflictPair[1];
+
+  var titles = { create: 'Add appointment', reschedule: 'Reschedule appointment', cancel: 'Cancel appointment' };
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    setConflict(false);
+    if (mode === 'create' && (!customer || !serviceID || !staffID || !dateValue || !timeValue)) {
+      setError('Choose a customer, service, staff member, date, and time.');
+      return;
+    }
+    if (mode === 'reschedule' && (!dateValue || !timeValue)) {
+      setError('Choose a new date and time.');
+      return;
+    }
+    if (mode === 'cancel' && !reason.trim()) {
+      setError('A cancellation reason is required.');
+      return;
+    }
+    setBusy(true);
+    try {
+      if (mode === 'create') {
+        var startsAt = zonedTimeToUtcISOString(dateValue, timeValue, props.timezone);
+        await sendJSON('POST', '/bookings', {
+          customer_id: customer.id, service_id: serviceID, staff_id: staffID,
+          starts_at: startsAt, notes: notes, idempotency_key: 'op-' + randomIdempotencyKey()
+        });
+      } else if (mode === 'reschedule') {
+        var newStartsAt = zonedTimeToUtcISOString(dateValue, timeValue, props.timezone);
+        await sendJSON('POST', '/bookings/' + encodeURIComponent(booking.id) + '/reschedule', {
+          expected_version: booking.schedule_version, starts_at: newStartsAt,
+          idempotency_key: 'op-' + randomIdempotencyKey()
+        });
+      } else {
+        await sendJSON('POST', '/bookings/' + encodeURIComponent(booking.id) + '/cancel', {
+          expected_version: booking.schedule_version, reason: reason.trim(),
+          idempotency_key: 'op-' + randomIdempotencyKey()
+        });
+      }
+      props.onSuccess();
+    } catch (requestError) {
+      if (requestError.status === 409) {
+        setConflict(true);
+        setError('This booking changed since it was loaded.');
+      } else {
+        setError(errorMessage(requestError));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  var content = h('form', { onSubmit: submit, 'aria-busy': busy ? 'true' : 'false' },
+    mode === 'create' ? h(CustomerPicker, { value: customer, onChange: setCustomer }) : null,
+    mode === 'create' ? h('div', { className: 'field' },
+      h('label', { htmlFor: 'booking-service' }, 'Service'),
+      h('select', { id: 'booking-service', value: serviceID, onChange: function(event) { setServiceID(event.target.value); } },
+        (props.services || []).map(function(service) {
+          return h('option', { key: service.id, value: service.id }, service.name + ' (' + service.duration_minutes + ' min)');
+        })
+      )
+    ) : null,
+    mode === 'create' ? h('div', { className: 'field' },
+      h('label', { htmlFor: 'booking-staff' }, 'Staff'),
+      h('select', { id: 'booking-staff', value: staffID, onChange: function(event) { setStaffID(event.target.value); } },
+        (props.staff || []).map(function(member) {
+          return h('option', { key: member.id, value: member.id }, member.display_name);
+        })
+      )
+    ) : null,
+    mode !== 'cancel' ? h('div', { style: { display: 'flex', gap: 'var(--space-3)' } },
+      h('div', { className: 'field', style: { flex: 1 } },
+        h('label', { htmlFor: 'booking-date' }, 'Date'),
+        h('input', { id: 'booking-date', type: 'date', value: dateValue, onChange: function(event) { setDateValue(event.target.value); } })
+      ),
+      h('div', { className: 'field', style: { flex: 1 } },
+        h('label', { htmlFor: 'booking-time' }, 'Time (' + props.timezone + ')'),
+        h('input', { id: 'booking-time', type: 'time', value: timeValue, onChange: function(event) { setTimeValue(event.target.value); } })
+      )
+    ) : null,
+    mode === 'create' ? h('div', { className: 'field' },
+      h('label', { htmlFor: 'booking-notes' }, 'Notes (optional)'),
+      h('input', { id: 'booking-notes', type: 'text', maxLength: 500, value: notes, onChange: function(event) { setNotes(event.target.value); } })
+    ) : null,
+    mode === 'cancel' ? h('div', { className: 'field' },
+      h('label', { htmlFor: 'booking-reason' }, 'Reason'),
+      h('input', { id: 'booking-reason', type: 'text', maxLength: 500, value: reason, onChange: function(event) { setReason(event.target.value); }, autoFocus: true })
+    ) : null,
+    error ? h('div', { className: 'auth-error', role: 'alert' },
+      error,
+      conflict ? h('div', { style: { marginTop: 'var(--space-2)' } },
+        h('button', { type: 'button', className: 'text-button', onClick: props.onConflictReload }, 'Reload the calendar and try again')
+      ) : null
+    ) : null,
+    h('div', { className: 'auth-actions', style: { justifyContent: 'space-between' } },
+      h('button', { type: 'button', className: 'secondary-button', onClick: props.onClose, disabled: busy }, 'Cancel'),
+      h('button', { type: 'submit', className: mode === 'cancel' ? 'secondary-button' : 'primary-button', disabled: busy },
+        busy ? 'Saving\u2026' : (mode === 'create' ? 'Create booking' : mode === 'reschedule' ? 'Save new time' : 'Cancel booking')
+      )
+    )
+  );
+
+  if (DS.Modal) {
+    return h(DS.Modal, { open: true, onClose: props.onClose, title: titles[mode] }, content);
+  }
+  return h('div', {
+    role: 'dialog', 'aria-modal': 'true', 'aria-label': titles[mode],
+    style: { position: 'fixed', inset: 0, zIndex: 50, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.5)' }
+  },
+    h('div', { style: { width: 'min(90vw, 420px)', padding: 'var(--space-6)', background: 'var(--surface-1)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-xl)', boxShadow: 'var(--shadow-overlay)' } },
+      h('h2', { style: { marginTop: 0 } }, titles[mode]),
+      content
+    )
+  );
+}
+
+function BookingDetailDrawer(props) {
+  var booking = props.booking;
+  var content = h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' } },
+    h('div', { className: 'kv-block' },
+      [
+        ['Customer', booking.customer_name],
+        ['Service', booking.service_name],
+        ['Staff', booking.staff_name],
+        ['Time', formatTime(booking.starts_at, props.timezone) + '\u2013' + formatTime(booking.ends_at, props.timezone)],
+        ['Status', statusLabel(booking.status)]
+      ].map(function(item) {
+        return h('div', { key: item[0], className: 'kv-row' },
+          h('span', { className: 'kv-label' }, item[0]),
+          h('span', { className: 'kv-value' }, item[1])
+        );
+      })
+    ),
+    booking.status !== 'cancelled' ? h('div', { style: { display: 'flex', gap: 'var(--space-2)' } },
+      h('button', { type: 'button', className: 'secondary-button', style: { flex: 1 }, onClick: function() { props.onCommand('reschedule', booking); } }, 'Reschedule'),
+      h('button', { type: 'button', className: 'secondary-button', style: { flex: 1 }, onClick: function() { props.onCommand('cancel', booking); } }, 'Cancel')
+    ) : null,
+    h('div', { className: 'auth-actions' },
+      h('button', { type: 'button', className: 'text-button', onClick: props.onClose }, 'Close')
+    )
+  );
+  if (DS.Drawer) {
+    return h(DS.Drawer, { open: true, onClose: props.onClose, title: 'Booking detail' }, content);
+  }
+  return h('div', {
+    role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Booking detail',
+    style: { position: 'fixed', inset: 0, zIndex: 50, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.5)' }
+  },
+    h('div', { style: { width: 'min(90vw, 420px)', padding: 'var(--space-6)', background: 'var(--surface-1)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-xl)', boxShadow: 'var(--shadow-overlay)' } },
+      h('h2', { style: { marginTop: 0 } }, 'Booking detail'),
+      content
+    )
+  );
+}
+
 function CalendarScreen(props) {
   var initialWeek = startOfWeek(dateKeyInTimezone(new Date(), props.timezone));
   var weekPair = React.useState(initialWeek);
@@ -1158,6 +1504,13 @@ function CalendarScreen(props) {
     10000,
     true
   );
+  var selectedPair = React.useState(null); // { booking } for the detail drawer
+  var selected = selectedPair[0];
+  var setSelected = selectedPair[1];
+  var commandPair = React.useState(null); // { mode, booking, staffID, date }
+  var command = commandPair[0];
+  var setCommand = commandPair[1];
+
   if (resource.loading) return h(LoadingState, { label: 'Loading calendar' });
   if (resource.error && !resource.data) return h(ErrorView, { error: resource.error, onRetry: resource.retry, title: 'Could not load the calendar' });
 
@@ -1180,13 +1533,28 @@ function CalendarScreen(props) {
     });
   }
 
+  function openBooking(booking) { setSelected({ booking: booking }); }
+  function openCommand(mode, booking, staffID, day) {
+    setSelected(null);
+    setCommand({ mode: mode, booking: booking || null, staffID: staffID || '', date: day || '' });
+  }
+  function afterCommandSuccess() {
+    setCommand(null);
+    resource.retry();
+  }
+
   return h('section', { 'aria-busy': resource.refreshing ? 'true' : 'false' },
     h('h1', { className: 'sr-only' }, 'Week calendar'),
     h(ResourceToolbar, { resource: resource }),
     h('div', { className: 'calendar-header' },
       h('button', { type: 'button', className: 'calendar-nav', 'aria-label': 'Previous week', onClick: function() { setWeekStart(addDays(weekStart, -7)); } }, h(Icon, { name: 'chevronLeft' })),
       h('h2', { 'aria-live': 'polite' }, formatDateKey(weekStart, { month: 'short', day: 'numeric', year: 'numeric' }) + ' \u2013 ' + formatDateKey(addDays(weekStart, 6), { month: 'short', day: 'numeric', year: 'numeric' })),
-      h('button', { type: 'button', className: 'calendar-nav', 'aria-label': 'Next week', onClick: function() { setWeekStart(addDays(weekStart, 7)); } }, h(Icon, { name: 'chevronRight' }))
+      h('button', { type: 'button', className: 'calendar-nav', 'aria-label': 'Next week', onClick: function() { setWeekStart(addDays(weekStart, 7)); } }, h(Icon, { name: 'chevronRight' })),
+      h('button', {
+        type: 'button', className: 'primary-button', style: { marginLeft: 'auto' },
+        onClick: function() { openCommand('create', null, (data.staff[0] && data.staff[0].id) || '', weekStart); },
+        disabled: !data.staff.length || !data.services.length
+      }, 'Add appointment')
     ),
     !data.staff.length ? h(EmptyView, { title: 'No active staff', description: 'The calendar will appear when an active staff member is configured.' }) : h(React.Fragment, null,
       !hasEvents ? h(EmptyView, { inline: true, compact: true, title: 'No bookings this week', description: 'The schedule is currently clear.' }) : null,
@@ -1207,16 +1575,14 @@ function CalendarScreen(props) {
                 return h('div', { key: day, className: 'cal-day-cell', role: 'gridcell', 'aria-label': staff.display_name + ', ' + formatDateKey(day, { weekday: 'long', month: 'long', day: 'numeric' }) },
                   dayBookings.map(function(booking) {
                     var time = formatTime(booking.starts_at, timezone) + '\u2013' + formatTime(booking.ends_at, timezone);
-                    return h('details', { key: booking.id, className: 'cal-booking', style: { borderLeftColor: bookingBorder(booking.status) } },
-                      h('summary', { 'aria-label': booking.customer_name + ', ' + booking.service_name + ', ' + time + ', ' + statusLabel(booking.status) },
-                        h('span', { className: 'cal-booking-name' }, booking.customer_name),
-                        h('span', { className: 'cal-booking-time' }, time)
-                      ),
-                      h('div', { className: 'cal-booking-detail' },
-                        h('div', null, booking.service_name),
-                        h('div', null, statusLabel(booking.status)),
-                        h('div', { className: 'mono' }, 'v' + booking.schedule_version)
-                      )
+                    return h('button', {
+                      key: booking.id, type: 'button', className: 'cal-booking',
+                      style: { display: 'block', width: '100%', textAlign: 'left', border: 0, borderLeft: '3px solid ' + bookingBorder(booking.status), font: 'inherit', cursor: 'pointer' },
+                      'aria-label': booking.customer_name + ', ' + booking.service_name + ', ' + time + ', ' + statusLabel(booking.status),
+                      onClick: function() { openBooking(booking); }
+                    },
+                      h('span', { className: 'cal-booking-name' }, booking.customer_name),
+                      h('span', { className: 'cal-booking-time' }, time)
                     );
                   }),
                   dayBlocks.map(function(block) {
@@ -1224,7 +1590,17 @@ function CalendarScreen(props) {
                       statusLabel(block.kind) + ' \u00b7 ' + formatTime(block.starts_at, timezone) + '\u2013' + formatTime(block.ends_at, timezone),
                       block.note ? h('div', null, block.note) : null
                     );
-                  })
+                  }),
+                  h('button', {
+                    type: 'button',
+                    'aria-label': 'Add appointment for ' + staff.display_name + ' on ' + formatDateKey(day, { weekday: 'long', month: 'long', day: 'numeric' }),
+                    style: {
+                      display: 'block', width: '100%', marginTop: 'var(--space-1)', padding: 'var(--space-0-5)',
+                      border: '1px dashed var(--border-default)', borderRadius: 'var(--radius-sm)', background: 'transparent',
+                      color: 'var(--text-tertiary)', cursor: 'pointer', font: 'inherit', fontSize: 'var(--fs-micro)'
+                    },
+                    onClick: function() { openCommand('create', null, staff.id, day); }
+                  }, '+')
                 );
               })
             );
@@ -1232,7 +1608,19 @@ function CalendarScreen(props) {
         )
       ),
       h('div', { className: 'resource-toolbar' }, 'Times shown in ' + timezone)
-    )
+    ),
+    selected ? h(BookingDetailDrawer, {
+      booking: selected.booking, timezone: timezone,
+      onClose: function() { setSelected(null); },
+      onCommand: function(mode, booking) { openCommand(mode, booking); }
+    }) : null,
+    command ? h(BookingCommandModal, {
+      mode: command.mode, booking: command.booking, timezone: timezone,
+      services: data.services, staff: data.staff, staffID: command.staffID, date: command.date,
+      onClose: function() { setCommand(null); },
+      onSuccess: afterCommandSuccess,
+      onConflictReload: afterCommandSuccess
+    }) : null
   );
 }
 

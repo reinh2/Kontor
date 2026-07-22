@@ -384,21 +384,255 @@ func serveOperatorRequest(handler http.Handler, method, target string) *httptest
 	return response
 }
 
+func serveOperatorJSON(handler http.Handler, method, target, body string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+testOperatorAdminToken)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func TestListCustomersForwardsQueryAndLimit(t *testing.T) {
+	backend := &fakeOperatorBackend{customersResult: CustomerList{Items: []Customer{}}}
+	handler := newOperatorTestHandler(t, backend)
+	response := serveOperatorRequest(handler, http.MethodGet, "/api/v1/operator/customers?q=Ada&limit=5")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	want := CustomerListRequest{Query: "Ada", Limit: 5}
+	if len(backend.customerRequests) != 1 || backend.customerRequests[0] != want {
+		t.Fatalf("customer requests=%#v, want %#v", backend.customerRequests, want)
+	}
+}
+
+func TestListCustomersDefaultsLimitAndRejectsInvalid(t *testing.T) {
+	backend := &fakeOperatorBackend{}
+	handler := newOperatorTestHandler(t, backend)
+	response := serveOperatorRequest(handler, http.MethodGet, "/api/v1/operator/customers")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(backend.customerRequests) != 1 || backend.customerRequests[0].Limit != 20 {
+		t.Fatalf("customer requests=%#v, want default limit 20", backend.customerRequests)
+	}
+
+	tests := []string{"limit=0", "limit=51", "limit=many", "q=" + strings.Repeat("x", 201)}
+	for _, query := range tests {
+		t.Run(query, func(t *testing.T) {
+			backend := &fakeOperatorBackend{}
+			handler := newOperatorTestHandler(t, backend)
+			response := serveOperatorRequest(handler, http.MethodGet, "/api/v1/operator/customers?"+query)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if calls := backend.callCount(); calls != 0 {
+				t.Fatalf("invalid query made %d backend calls", calls)
+			}
+		})
+	}
+}
+
+const (
+	testCommandCustomer = "51000000-0000-4000-8000-0000000000aa"
+	testCommandService  = "81000000-0000-4000-8000-0000000000aa"
+	testCommandStaff    = "82000000-0000-4000-8000-0000000000aa"
+	testCommandBooking  = "91000000-0000-4000-8000-0000000000aa"
+)
+
+func TestCreateBookingForwardsParsedCommand(t *testing.T) {
+	backend := &fakeOperatorBackend{createResult: Booking{ID: testCommandBooking, ScheduleVersion: 1}}
+	handler := newOperatorTestHandler(t, backend)
+	body := `{"customer_id":"` + testCommandCustomer + `","service_id":"` + testCommandService +
+		`","staff_id":"` + testCommandStaff + `","starts_at":"2026-07-23T10:00:00Z","notes":"walk-in"}`
+
+	response := serveOperatorJSON(handler, http.MethodPost, "/api/v1/operator/bookings", body)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(backend.createRequests) != 1 {
+		t.Fatalf("create requests=%#v", backend.createRequests)
+	}
+	got := backend.createRequests[0]
+	if got.CustomerID != testCommandCustomer || got.ServiceID != testCommandService ||
+		got.StaffID != testCommandStaff || got.Notes != "walk-in" {
+		t.Fatalf("create command=%#v", got)
+	}
+	if got.StartsAt.Format(time.RFC3339) != "2026-07-23T10:00:00Z" {
+		t.Fatalf("starts_at=%s", got.StartsAt.Format(time.RFC3339))
+	}
+	var booking Booking
+	if err := json.Unmarshal(response.Body.Bytes(), &booking); err != nil {
+		t.Fatal(err)
+	}
+	if booking.ID != testCommandBooking {
+		t.Fatalf("response booking=%#v", booking)
+	}
+}
+
+func TestCreateBookingRejectsInvalidBodies(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "not json", body: "{"},
+		{name: "unknown field", body: `{"customer_id":"` + testCommandCustomer + `","service_id":"` + testCommandService + `","staff_id":"` + testCommandStaff + `","starts_at":"2026-07-23T10:00:00Z","bogus":true}`},
+		{name: "bad customer uuid", body: `{"customer_id":"nope","service_id":"` + testCommandService + `","staff_id":"` + testCommandStaff + `","starts_at":"2026-07-23T10:00:00Z"}`},
+		{name: "missing starts_at", body: `{"customer_id":"` + testCommandCustomer + `","service_id":"` + testCommandService + `","staff_id":"` + testCommandStaff + `"}`},
+		{name: "bad starts_at", body: `{"customer_id":"` + testCommandCustomer + `","service_id":"` + testCommandService + `","staff_id":"` + testCommandStaff + `","starts_at":"soon"}`},
+		{name: "short idempotency key", body: `{"customer_id":"` + testCommandCustomer + `","service_id":"` + testCommandService + `","staff_id":"` + testCommandStaff + `","starts_at":"2026-07-23T10:00:00Z","idempotency_key":"short"}`},
+		{name: "trailing json", body: `{"customer_id":"` + testCommandCustomer + `","service_id":"` + testCommandService + `","staff_id":"` + testCommandStaff + `","starts_at":"2026-07-23T10:00:00Z"}{}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &fakeOperatorBackend{}
+			handler := newOperatorTestHandler(t, backend)
+			response := serveOperatorJSON(handler, http.MethodPost, "/api/v1/operator/bookings", test.body)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if calls := backend.callCount(); calls != 0 {
+				t.Fatalf("invalid body made %d backend calls", calls)
+			}
+		})
+	}
+}
+
+func TestRescheduleBookingForwardsCommand(t *testing.T) {
+	backend := &fakeOperatorBackend{rescheduleResult: Booking{ID: testCommandBooking, ScheduleVersion: 3}}
+	handler := newOperatorTestHandler(t, backend)
+	body := `{"expected_version":2,"starts_at":"2026-07-24T09:30:00Z"}`
+
+	response := serveOperatorJSON(handler, http.MethodPost, "/api/v1/operator/bookings/"+testCommandBooking+"/reschedule", body)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(backend.rescheduleRequests) != 1 {
+		t.Fatalf("reschedule requests=%#v", backend.rescheduleRequests)
+	}
+	got := backend.rescheduleRequests[0]
+	if got.BookingID != testCommandBooking || got.ExpectedVersion != 2 ||
+		got.StartsAt.Format(time.RFC3339) != "2026-07-24T09:30:00Z" {
+		t.Fatalf("reschedule command=%#v", got)
+	}
+}
+
+func TestRescheduleBookingRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name   string
+		target string
+		body   string
+	}{
+		{name: "bad booking id", target: "/api/v1/operator/bookings/not-a-uuid/reschedule", body: `{"expected_version":1,"starts_at":"2026-07-24T09:30:00Z"}`},
+		{name: "missing version", target: "/api/v1/operator/bookings/" + testCommandBooking + "/reschedule", body: `{"starts_at":"2026-07-24T09:30:00Z"}`},
+		{name: "zero version", target: "/api/v1/operator/bookings/" + testCommandBooking + "/reschedule", body: `{"expected_version":0,"starts_at":"2026-07-24T09:30:00Z"}`},
+		{name: "bad time", target: "/api/v1/operator/bookings/" + testCommandBooking + "/reschedule", body: `{"expected_version":1,"starts_at":"later"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &fakeOperatorBackend{}
+			handler := newOperatorTestHandler(t, backend)
+			response := serveOperatorJSON(handler, http.MethodPost, test.target, test.body)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if calls := backend.callCount(); calls != 0 {
+				t.Fatalf("invalid reschedule made %d backend calls", calls)
+			}
+		})
+	}
+}
+
+func TestCancelBookingForwardsCommand(t *testing.T) {
+	backend := &fakeOperatorBackend{cancelResult: Booking{ID: testCommandBooking, Status: "cancelled", ScheduleVersion: 3}}
+	handler := newOperatorTestHandler(t, backend)
+	body := `{"expected_version":2,"reason":"customer no longer needs it"}`
+
+	response := serveOperatorJSON(handler, http.MethodPost, "/api/v1/operator/bookings/"+testCommandBooking+"/cancel", body)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(backend.cancelRequests) != 1 {
+		t.Fatalf("cancel requests=%#v", backend.cancelRequests)
+	}
+	got := backend.cancelRequests[0]
+	if got.BookingID != testCommandBooking || got.ExpectedVersion != 2 || got.Reason != "customer no longer needs it" {
+		t.Fatalf("cancel command=%#v", got)
+	}
+}
+
+func TestCancelBookingRejectsMissingReason(t *testing.T) {
+	backend := &fakeOperatorBackend{}
+	handler := newOperatorTestHandler(t, backend)
+	response := serveOperatorJSON(handler, http.MethodPost, "/api/v1/operator/bookings/"+testCommandBooking+"/cancel", `{"expected_version":1,"reason":"  "}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if calls := backend.callCount(); calls != 0 {
+		t.Fatalf("invalid cancel made %d backend calls", calls)
+	}
+}
+
+func TestBookingCommandErrorMapping(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{name: "version conflict", err: ErrVersionConflict, status: http.StatusConflict},
+		{name: "slot unavailable", err: ErrSlotUnavailable, status: http.StatusConflict},
+		{name: "state conflict", err: ErrBookingStateConflict, status: http.StatusConflict},
+		{name: "not found", err: ErrBookingNotFound, status: http.StatusNotFound},
+		{name: "invalid", err: ErrInvalidCommand, status: http.StatusBadRequest},
+		{name: "internal", err: errors.New("boom"), status: http.StatusInternalServerError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &fakeOperatorBackend{cancelErr: test.err}
+			handler := newOperatorTestHandler(t, backend)
+			response := serveOperatorJSON(handler, http.MethodPost, "/api/v1/operator/bookings/"+testCommandBooking+"/cancel", `{"expected_version":1,"reason":"done"}`)
+			if response.Code != test.status {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if test.status == http.StatusInternalServerError && strings.Contains(response.Body.String(), "boom") {
+				t.Fatalf("internal error leaked detail: %s", response.Body.String())
+			}
+		})
+	}
+}
+
 type fakeOperatorBackend struct {
-	dashboardRequests []DashboardRequest
-	runRequests       []ListRunsRequest
-	runIDs            []string
-	calendarRequests  []CalendarRequest
+	dashboardRequests  []DashboardRequest
+	runRequests        []ListRunsRequest
+	runIDs             []string
+	calendarRequests   []CalendarRequest
+	customerRequests   []CustomerListRequest
+	createRequests     []CreateBookingCommand
+	rescheduleRequests []RescheduleBookingCommand
+	cancelRequests     []CancelBookingCommand
 
-	dashboardResult Dashboard
-	runsResult      RunPage
-	runResult       RunDetail
-	calendarResult  Calendar
+	dashboardResult  Dashboard
+	runsResult       RunPage
+	runResult        RunDetail
+	calendarResult   Calendar
+	customersResult  CustomerList
+	createResult     Booking
+	rescheduleResult Booking
+	cancelResult     Booking
 
-	dashboardErr error
-	runsErr      error
-	runErr       error
-	calendarErr  error
+	dashboardErr  error
+	runsErr       error
+	runErr        error
+	calendarErr   error
+	customersErr  error
+	createErr     error
+	rescheduleErr error
+	cancelErr     error
 }
 
 func (f *fakeOperatorBackend) Dashboard(_ context.Context, request DashboardRequest) (Dashboard, error) {
@@ -421,8 +655,29 @@ func (f *fakeOperatorBackend) Calendar(_ context.Context, request CalendarReques
 	return f.calendarResult, f.calendarErr
 }
 
+func (f *fakeOperatorBackend) ListCustomers(_ context.Context, request CustomerListRequest) (CustomerList, error) {
+	f.customerRequests = append(f.customerRequests, request)
+	return f.customersResult, f.customersErr
+}
+
+func (f *fakeOperatorBackend) CreateBooking(_ context.Context, command CreateBookingCommand) (Booking, error) {
+	f.createRequests = append(f.createRequests, command)
+	return f.createResult, f.createErr
+}
+
+func (f *fakeOperatorBackend) RescheduleBooking(_ context.Context, command RescheduleBookingCommand) (Booking, error) {
+	f.rescheduleRequests = append(f.rescheduleRequests, command)
+	return f.rescheduleResult, f.rescheduleErr
+}
+
+func (f *fakeOperatorBackend) CancelBooking(_ context.Context, command CancelBookingCommand) (Booking, error) {
+	f.cancelRequests = append(f.cancelRequests, command)
+	return f.cancelResult, f.cancelErr
+}
+
 func (f *fakeOperatorBackend) callCount() int {
-	return len(f.dashboardRequests) + len(f.runRequests) + len(f.runIDs) + len(f.calendarRequests)
+	return len(f.dashboardRequests) + len(f.runRequests) + len(f.runIDs) + len(f.calendarRequests) +
+		len(f.customerRequests) + len(f.createRequests) + len(f.rescheduleRequests) + len(f.cancelRequests)
 }
 
 var _ Backend = (*fakeOperatorBackend)(nil)

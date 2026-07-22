@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -57,6 +58,10 @@ func New(config Config, backend Backend, logger *slog.Logger) (http.Handler, err
 	mux.HandleFunc("GET /api/v1/operator/runs", h.listRuns)
 	mux.HandleFunc("GET /api/v1/operator/runs/{runID}", h.getRun)
 	mux.HandleFunc("GET /api/v1/operator/calendar", h.getCalendar)
+	mux.HandleFunc("GET /api/v1/operator/customers", h.listCustomers)
+	mux.HandleFunc("POST /api/v1/operator/bookings", h.createBooking)
+	mux.HandleFunc("POST /api/v1/operator/bookings/{bookingID}/reschedule", h.rescheduleBooking)
+	mux.HandleFunc("POST /api/v1/operator/bookings/{bookingID}/cancel", h.cancelBooking)
 	return h.recover(h.noStore(h.authenticate(mux))), nil
 }
 
@@ -200,6 +205,193 @@ func (h *Handler) getCalendar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) listCustomers(w http.ResponseWriter, r *http.Request) {
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(query) > 200 {
+		writeProblem(w, http.StatusBadRequest, "invalid query", "q must not exceed 200 characters")
+		return
+	}
+	limit := 20
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 50 {
+			writeProblem(w, http.StatusBadRequest, "invalid limit", "limit must be an integer between 1 and 50")
+			return
+		}
+		limit = parsed
+	}
+	result, err := h.backend.ListCustomers(r.Context(), CustomerListRequest{Query: query, Limit: limit})
+	if err != nil {
+		h.internalError(w, r, "customers query failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) createBooking(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CustomerID     string `json:"customer_id"`
+		ServiceID      string `json:"service_id"`
+		StaffID        string `json:"staff_id"`
+		StartsAt       string `json:"starts_at"`
+		Notes          string `json:"notes"`
+		IdempotencyKey string `json:"idempotency_key"`
+	}
+	if !decodeCommandBody(w, r, &body) {
+		return
+	}
+	if !validUUID(body.CustomerID) || !validUUID(body.ServiceID) || !validUUID(body.StaffID) {
+		writeProblem(w, http.StatusBadRequest, "invalid booking", "customer_id, service_id, and staff_id must be UUIDs")
+		return
+	}
+	startsAt, ok := parseCommandTime(w, body.StartsAt)
+	if !ok {
+		return
+	}
+	if len(body.Notes) > 500 {
+		writeProblem(w, http.StatusBadRequest, "invalid booking", "notes must not exceed 500 characters")
+		return
+	}
+	if !validOptionalIdempotencyKey(w, body.IdempotencyKey) {
+		return
+	}
+	booking, err := h.backend.CreateBooking(r.Context(), CreateBookingCommand{
+		CustomerID: body.CustomerID, ServiceID: body.ServiceID, StaffID: body.StaffID,
+		StartsAt: startsAt, Notes: body.Notes, IdempotencyKey: body.IdempotencyKey,
+	})
+	if err != nil {
+		h.commandError(w, r, "create booking failed", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, booking)
+}
+
+func (h *Handler) rescheduleBooking(w http.ResponseWriter, r *http.Request) {
+	bookingID := strings.TrimSpace(r.PathValue("bookingID"))
+	if !validUUID(bookingID) {
+		writeProblem(w, http.StatusBadRequest, "invalid booking id", "booking id must be a UUID")
+		return
+	}
+	var body struct {
+		ExpectedVersion int    `json:"expected_version"`
+		StartsAt        string `json:"starts_at"`
+		IdempotencyKey  string `json:"idempotency_key"`
+	}
+	if !decodeCommandBody(w, r, &body) {
+		return
+	}
+	if body.ExpectedVersion <= 0 {
+		writeProblem(w, http.StatusBadRequest, "invalid reschedule", "expected_version must be a positive integer")
+		return
+	}
+	startsAt, ok := parseCommandTime(w, body.StartsAt)
+	if !ok {
+		return
+	}
+	if !validOptionalIdempotencyKey(w, body.IdempotencyKey) {
+		return
+	}
+	booking, err := h.backend.RescheduleBooking(r.Context(), RescheduleBookingCommand{
+		BookingID: bookingID, ExpectedVersion: body.ExpectedVersion,
+		StartsAt: startsAt, IdempotencyKey: body.IdempotencyKey,
+	})
+	if err != nil {
+		h.commandError(w, r, "reschedule booking failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, booking)
+}
+
+func (h *Handler) cancelBooking(w http.ResponseWriter, r *http.Request) {
+	bookingID := strings.TrimSpace(r.PathValue("bookingID"))
+	if !validUUID(bookingID) {
+		writeProblem(w, http.StatusBadRequest, "invalid booking id", "booking id must be a UUID")
+		return
+	}
+	var body struct {
+		ExpectedVersion int    `json:"expected_version"`
+		Reason          string `json:"reason"`
+		IdempotencyKey  string `json:"idempotency_key"`
+	}
+	if !decodeCommandBody(w, r, &body) {
+		return
+	}
+	if body.ExpectedVersion <= 0 {
+		writeProblem(w, http.StatusBadRequest, "invalid cancel", "expected_version must be a positive integer")
+		return
+	}
+	if reason := strings.TrimSpace(body.Reason); reason == "" || len(body.Reason) > 500 {
+		writeProblem(w, http.StatusBadRequest, "invalid cancel", "reason must contain between 1 and 500 characters")
+		return
+	}
+	if !validOptionalIdempotencyKey(w, body.IdempotencyKey) {
+		return
+	}
+	booking, err := h.backend.CancelBooking(r.Context(), CancelBookingCommand{
+		BookingID: bookingID, ExpectedVersion: body.ExpectedVersion,
+		Reason: body.Reason, IdempotencyKey: body.IdempotencyKey,
+	})
+	if err != nil {
+		h.commandError(w, r, "cancel booking failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, booking)
+}
+
+// commandError maps a booking-command failure to a problem response, keeping
+// domain detail out of 5xx bodies while giving 4xx conflicts an actionable title.
+func (h *Handler) commandError(w http.ResponseWriter, r *http.Request, operation string, err error) {
+	switch {
+	case errors.Is(err, ErrInvalidCommand):
+		writeProblem(w, http.StatusBadRequest, "invalid command", "The booking command was rejected as invalid")
+	case errors.Is(err, ErrBookingNotFound):
+		writeProblem(w, http.StatusNotFound, "booking not found", "The requested booking does not exist")
+	case errors.Is(err, ErrVersionConflict):
+		writeProblem(w, http.StatusConflict, "schedule version conflict", "The booking changed since it was loaded; reload it and try again")
+	case errors.Is(err, ErrSlotUnavailable):
+		writeProblem(w, http.StatusConflict, "slot unavailable", "The requested time overlaps another booking")
+	case errors.Is(err, ErrBookingStateConflict):
+		writeProblem(w, http.StatusConflict, "booking state conflict", "The booking is not in a state that allows this operation")
+	default:
+		h.internalError(w, r, operation, err)
+	}
+}
+
+func decodeCommandBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid request body", "The request body must be a single valid JSON object")
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeProblem(w, http.StatusBadRequest, "invalid request body", "The request body must contain a single JSON object")
+		return false
+	}
+	return true
+}
+
+func parseCommandTime(w http.ResponseWriter, value string) (time.Time, bool) {
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	if err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid time", "starts_at must be an RFC3339 timestamp")
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func validOptionalIdempotencyKey(w http.ResponseWriter, key string) bool {
+	if key == "" {
+		return true
+	}
+	if length := len(key); length < 16 || length > 128 {
+		writeProblem(w, http.StatusBadRequest, "invalid idempotency key", "idempotency_key must contain between 16 and 128 characters")
+		return false
+	}
+	return true
 }
 
 func (h *Handler) authenticate(next http.Handler) http.Handler {

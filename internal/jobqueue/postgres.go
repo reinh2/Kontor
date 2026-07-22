@@ -264,3 +264,47 @@ func retryDelay(attempts int) time.Duration {
 	}
 	return delay
 }
+
+// CancelBookingJobs retires still-outstanding jobs for a booking inside the
+// caller's transaction, so cancelling a booking and stopping its reminder
+// commit atomically. It targets pending and claimed rows (a claimed reminder
+// for a just-cancelled booking should not fire); completed, dead, and already
+// cancelled jobs are left untouched. An empty jobType matches every type.
+//
+// It intentionally takes a pgx.Tx (like Enqueue) rather than the pool so the
+// mutation shares the booking write's atomicity and is never visible unless
+// the booking change also commits.
+func CancelBookingJobs(ctx context.Context, tx pgx.Tx, tenantID, bookingID, jobType string) (int64, error) {
+	tag, err := tx.Exec(ctx, `
+		UPDATE jobs
+		SET status = 'cancelled', cancelled_at = now(), claimed_at = NULL
+		WHERE tenant_id = $1 AND booking_id = $2
+		  AND status IN ('pending', 'claimed')
+		  AND ($3 = '' OR job_type = $3)`,
+		tenantID, bookingID, jobType)
+	if err != nil {
+		return 0, fmt.Errorf("jobqueue: cancel booking %s jobs: %w", bookingID, err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// UpdateReminderSchedule moves the scheduled time carried in a booking's
+// pending send_reminder payload inside the caller's transaction, so a
+// reschedule updates the booking and its reminder together. Claimed reminders
+// are left alone because a worker may already be delivering them; the new time
+// still lands via the booking row and the customer is not sent a stale time by
+// this path. It returns the number of reminder jobs updated.
+func UpdateReminderSchedule(ctx context.Context, tx pgx.Tx, tenantID, bookingID string, newStartsAt time.Time, timezone string) (int64, error) {
+	tag, err := tx.Exec(ctx, `
+		UPDATE jobs
+		SET payload_json = jsonb_set(
+		        jsonb_set(payload_json, '{starts_at}', to_jsonb($3::text), true),
+		        '{timezone}', to_jsonb($4::text), true)
+		WHERE tenant_id = $1 AND booking_id = $2
+		  AND job_type = 'send_reminder' AND status = 'pending'`,
+		tenantID, bookingID, newStartsAt.UTC().Format(time.RFC3339), timezone)
+	if err != nil {
+		return 0, fmt.Errorf("jobqueue: reschedule booking %s reminders: %w", bookingID, err)
+	}
+	return tag.RowsAffected(), nil
+}
