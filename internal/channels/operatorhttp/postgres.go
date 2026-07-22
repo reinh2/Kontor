@@ -40,6 +40,7 @@ type PostgreSQL struct {
 	tenantID string
 	timezone string
 	location *time.Location
+	actorRef string
 	now      func() time.Time
 }
 
@@ -59,7 +60,7 @@ func NewPostgreSQL(pool *pgxpool.Pool, trace traceReader, commands bookingComman
 	}
 	return &PostgreSQL{
 		pool: pool, trace: trace, commands: commands, tenantID: tenantID, timezone: timezone,
-		location: location, now: time.Now,
+		location: location, actorRef: "operator", now: time.Now,
 	}, nil
 }
 
@@ -556,7 +557,7 @@ func (s *PostgreSQL) CreateBooking(ctx context.Context, command CreateBookingCom
 		StaffID:        command.StaffID,
 		StartsAt:       command.StartsAt,
 		Notes:          command.Notes,
-		ActorRef:       "operator",
+		ActorRef:       s.actorRef,
 		IdempotencyKey: orGeneratedKey(command.IdempotencyKey),
 	})
 	if err != nil {
@@ -572,7 +573,7 @@ func (s *PostgreSQL) RescheduleBooking(ctx context.Context, command RescheduleBo
 		BookingID:       command.BookingID,
 		ExpectedVersion: command.ExpectedVersion,
 		NewStartsAt:     command.StartsAt,
-		ActorRef:        "operator",
+		ActorRef:        s.actorRef,
 		IdempotencyKey:  orGeneratedKey(command.IdempotencyKey),
 	})
 	if err != nil {
@@ -588,7 +589,7 @@ func (s *PostgreSQL) CancelBooking(ctx context.Context, command CancelBookingCom
 		BookingID:       command.BookingID,
 		ExpectedVersion: command.ExpectedVersion,
 		Reason:          command.Reason,
-		ActorRef:        "operator",
+		ActorRef:        s.actorRef,
 		IdempotencyKey:  orGeneratedKey(command.IdempotencyKey),
 	})
 	if err != nil {

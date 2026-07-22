@@ -52,3 +52,24 @@ func TestDisabledOperatorAPIFallsThroughAsNotFound(t *testing.T) {
 		t.Fatalf("disabled operator status=%d", response.Code)
 	}
 }
+
+func TestStage6TelegramRouteCapturesTenantSlug(t *testing.T) {
+	webhook := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Tenant-Slug", r.PathValue("tenantSlug"))
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := buildStage6HTTPHandler(
+		http.NotFoundHandler(),
+		http.NotFoundHandler(),
+		http.NotFoundHandler(),
+		http.NotFoundHandler(),
+		webhook,
+		httpx.NewRateLimiter(1000, 1000),
+	)
+	request := httptest.NewRequest(http.MethodPost, "/webhooks/v1/telegram/salon-nord", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || response.Header().Get("X-Tenant-Slug") != "salon-nord" {
+		t.Fatalf("status=%d tenant slug=%q", response.Code, response.Header().Get("X-Tenant-Slug"))
+	}
+}

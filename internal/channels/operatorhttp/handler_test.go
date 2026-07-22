@@ -14,16 +14,21 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/reinhlord/kontor/internal/identity"
 )
 
-const testOperatorAdminToken = "stage5-operator-admin-token-0123456789abcdef"
+const testOperatorSessionToken = "test-operator-session-token-0123456789abcdef"
 
 var (
+	testOperatorPrincipal = identity.Principal{
+		TenantID: "00000000-0000-4000-8000-000000000001", TenantName: "Salon Nord",
+		Timezone: "Europe/Berlin", Currency: "EUR", OperatorID: "operator-salon-nord",
+		Email: "owner@salon-nord.test", DisplayName: "Salon owner", Role: identity.RoleOwner,
+	}
 	testOperatorSession = Session{
-		TenantID:   "00000000-0000-4000-8000-000000000001",
-		TenantName: "Salon Nord",
-		Timezone:   "Europe/Berlin",
-		Currency:   "EUR",
+		TenantID: "00000000-0000-4000-8000-000000000001", TenantName: "Salon Nord",
+		Timezone: "Europe/Berlin", Currency: "EUR", OperatorID: "operator-salon-nord",
+		OperatorEmail: "owner@salon-nord.test", OperatorName: "Salon owner", Role: identity.RoleOwner,
 	}
 	testOperatorNow = time.Date(2026, time.July, 22, 18, 30, 0, 0, time.UTC)
 )
@@ -35,7 +40,7 @@ func TestAuthenticationRejectsBeforeCallingBackend(t *testing.T) {
 	}{
 		{name: "missing"},
 		{name: "wrong", authorization: "Bearer another-operator-token-that-is-long-enough"},
-		{name: "malformed scheme", authorization: "Basic " + testOperatorAdminToken},
+		{name: "malformed scheme", authorization: "Basic " + testOperatorSessionToken},
 		{name: "malformed fields", authorization: "Bearer one two"},
 		{name: "conversation capability", authorization: "Bearer tPZUHj2sg4Sk7dVvGQ3B_cLkVHwKBt0SgK6VdA1QeYo"},
 	}
@@ -366,9 +371,10 @@ func TestNonMatchingRouteReturnsNotFoundWithoutBackendCall(t *testing.T) {
 func newOperatorTestHandler(t *testing.T, backend Backend) http.Handler {
 	t.Helper()
 	handler, err := New(Config{
-		AdminToken: testOperatorAdminToken,
-		Session:    testOperatorSession,
-		Now:        func() time.Time { return testOperatorNow },
+		Authenticator: testSessionValidator{principals: map[string]identity.Principal{
+			testOperatorSessionToken: testOperatorPrincipal,
+		}},
+		Now: func() time.Time { return testOperatorNow },
 	}, backend, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -378,7 +384,7 @@ func newOperatorTestHandler(t *testing.T, backend Backend) http.Handler {
 
 func serveOperatorRequest(handler http.Handler, method, target string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, target, nil)
-	request.Header.Set("Authorization", "Bearer "+testOperatorAdminToken)
+	request.Header.Set("Authorization", "Bearer "+testOperatorSessionToken)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
@@ -386,7 +392,7 @@ func serveOperatorRequest(handler http.Handler, method, target string) *httptest
 
 func serveOperatorJSON(handler http.Handler, method, target, body string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, target, strings.NewReader(body))
-	request.Header.Set("Authorization", "Bearer "+testOperatorAdminToken)
+	request.Header.Set("Authorization", "Bearer "+testOperatorSessionToken)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

@@ -1,6 +1,6 @@
-// Package operatorhttp exposes the Stage 5 operator read API. It is scoped to
-// the configured fixed tenant and is mounted only when an explicit admin token
-// is configured; Stage 6 replaces that token with operator identities.
+// Package operatorhttp exposes the tenant-scoped operator API. Every request
+// is authenticated through an opaque operator session, which determines the
+// tenant and owner/staff role before any backend access.
 package operatorhttp
 
 import (
@@ -12,10 +12,14 @@ import (
 )
 
 type Session struct {
-	TenantID   string `json:"tenant_id"`
-	TenantName string `json:"tenant_name"`
-	Timezone   string `json:"timezone"`
-	Currency   string `json:"currency"`
+	TenantID      string `json:"tenant_id"`
+	TenantName    string `json:"tenant_name"`
+	Timezone      string `json:"timezone"`
+	Currency      string `json:"currency"`
+	OperatorID    string `json:"operator_id"`
+	OperatorEmail string `json:"operator_email"`
+	OperatorName  string `json:"operator_name"`
+	Role          string `json:"role"`
 }
 
 type DashboardRequest struct {

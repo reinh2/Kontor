@@ -53,13 +53,14 @@ func run() error {
 	if err := database.ApplyMigrations(ctx, pool, migrations.Files, "."); err != nil {
 		return err
 	}
-	if err := demo.EnsureFixedTenant(ctx, pool, demo.Tenant{
-		ID: cfg.Tenant.ID, Slug: cfg.Tenant.Slug, Name: cfg.Tenant.Name, Timezone: cfg.Tenant.Timezone,
-	}); err != nil {
-		return err
-	}
 	if cfg.DemoMode {
-		if err := demo.SeedCatalog(ctx, pool, cfg.Tenant.ID); err != nil {
+		if err := demo.EnsureFixedTenant(ctx, pool, demo.Tenant{
+			ID: cfg.Tenant.ID, Slug: cfg.Tenant.Slug, Name: cfg.Tenant.Name,
+			Timezone: cfg.Tenant.Timezone, Currency: cfg.Tenant.Currency,
+		}); err != nil {
+			return err
+		}
+		if err := demo.SeedCatalog(ctx, pool, cfg.Tenant.ID, cfg.Tenant.Currency); err != nil {
 			return err
 		}
 	}

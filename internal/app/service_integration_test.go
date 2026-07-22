@@ -41,11 +41,12 @@ func TestStage1ConversationCreatesBookingOnlyAfterConfirmation(t *testing.T) {
 
 	cfg := stage1TestConfig()
 	if err := demo.EnsureFixedTenant(ctx, pool, demo.Tenant{
-		ID: cfg.Tenant.ID, Slug: cfg.Tenant.Slug, Name: cfg.Tenant.Name, Timezone: cfg.Tenant.Timezone,
+		ID: cfg.Tenant.ID, Slug: cfg.Tenant.Slug, Name: cfg.Tenant.Name,
+		Timezone: cfg.Tenant.Timezone, Currency: cfg.Tenant.Currency,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := demo.SeedCatalog(ctx, pool, cfg.Tenant.ID); err != nil {
+	if err := demo.SeedCatalog(ctx, pool, cfg.Tenant.ID, cfg.Tenant.Currency); err != nil {
 		t.Fatal(err)
 	}
 	components, err := bootstrap.Build(ctx, cfg, pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -209,11 +210,12 @@ func TestStage1SameConversationLockContentionIsBoundedBeforeSave(t *testing.T) {
 	defer cancel()
 	cfg := stage1TestConfig()
 	if err := demo.EnsureFixedTenant(ctx, pool, demo.Tenant{
-		ID: cfg.Tenant.ID, Slug: cfg.Tenant.Slug, Name: cfg.Tenant.Name, Timezone: cfg.Tenant.Timezone,
+		ID: cfg.Tenant.ID, Slug: cfg.Tenant.Slug, Name: cfg.Tenant.Name,
+		Timezone: cfg.Tenant.Timezone, Currency: cfg.Tenant.Currency,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := demo.SeedCatalog(ctx, pool, cfg.Tenant.ID); err != nil {
+	if err := demo.SeedCatalog(ctx, pool, cfg.Tenant.ID, cfg.Tenant.Currency); err != nil {
 		t.Fatal(err)
 	}
 	components, err := bootstrap.Build(ctx, cfg, pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -259,7 +261,7 @@ func TestStage1AuthorizedConfirmationCanBeRetriedAfterModelIgnoresIt(t *testing.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cfg := stage1TestConfig()
-	if err := demo.SeedCatalog(ctx, pool, cfg.Tenant.ID); err != nil {
+	if err := demo.SeedCatalog(ctx, pool, cfg.Tenant.ID, cfg.Tenant.Currency); err != nil {
 		t.Fatal(err)
 	}
 
@@ -373,7 +375,7 @@ func TestStage1PipelinedConsentCannotAuthorizeUnseenProposal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cfg := stage1TestConfig()
-	if err := demo.SeedCatalog(ctx, pool, cfg.Tenant.ID); err != nil {
+	if err := demo.SeedCatalog(ctx, pool, cfg.Tenant.ID, cfg.Tenant.Currency); err != nil {
 		t.Fatal(err)
 	}
 	components, err := bootstrap.Build(ctx, cfg, pool, slog.New(slog.NewTextHandler(io.Discard, nil)))

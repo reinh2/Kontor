@@ -239,7 +239,7 @@ var h = React.createElement;
 
 // ── Live API and formatting ──────────────────────────────────────────────────
 var API_BASE = '/api/v1/operator';
-var TOKEN_KEY = 'kontor.operator.admin-token';
+var TOKEN_KEY = 'kontor.operator.session';
 var DS = window.KontorKanonDesignSystem_452420 || {};
 
 function storedToken() {
@@ -580,6 +580,10 @@ function NavLinks(props) {
 }
 
 function Sidebar(props) {
+  var displayName = props.session.operator_name || props.session.operator_email || 'Operator';
+  var initials = displayName.split(/\s+/).filter(Boolean).slice(0, 2).map(function(part) {
+    return part.charAt(0).toUpperCase();
+  }).join('') || 'OP';
   return h('aside', { className: 'sidebar', 'aria-label': 'Operator navigation' },
     h('div', { className: 'sidebar-brand' },
       h('div', { className: 'sidebar-monogram' }, 'K'),
@@ -587,10 +591,10 @@ function Sidebar(props) {
     ),
     h('nav', { className: 'sidebar-nav', 'aria-label': 'Main' }, h(NavLinks, { current: props.current })),
     h('div', { className: 'sidebar-bottom' },
-      h('div', { className: 'avatar avatar-accent', 'aria-hidden': 'true' }, 'OP'),
+      h('div', { className: 'avatar avatar-accent', 'aria-hidden': 'true' }, initials),
       h('div', null,
-        h('div', { className: 'sidebar-user-name' }, 'Operator'),
-        h('div', { className: 'sidebar-user-sub' }, props.session.tenant_name)
+        h('div', { className: 'sidebar-user-name' }, displayName),
+        h('div', { className: 'sidebar-user-sub' }, (props.session.role || 'operator') + ' · ' + props.session.tenant_name)
       )
     )
   );
@@ -630,9 +634,15 @@ function Badge(props) {
 }
 
 function AuthGate(props) {
-  var tokenPair = React.useState('');
-  var token = tokenPair[0];
-  var setToken = tokenPair[1];
+  var tenantPair = React.useState('');
+  var tenantSlug = tenantPair[0];
+  var setTenantSlug = tenantPair[1];
+  var emailPair = React.useState('');
+  var email = emailPair[0];
+  var setEmail = emailPair[1];
+  var passwordPair = React.useState('');
+  var password = passwordPair[0];
+  var setPassword = passwordPair[1];
   var busyPair = React.useState(false);
   var busy = busyPair[0];
   var setBusy = busyPair[1];
@@ -642,20 +652,41 @@ function AuthGate(props) {
 
   async function submit(event) {
     event.preventDefault();
-    var candidate = token.trim();
-    if (!candidate) {
-      setError('Enter the admin token.');
+    var slug = tenantSlug.trim();
+    var operatorEmail = email.trim();
+    if (!slug || !operatorEmail || !password) {
+      setError('Enter your tenant, email address, and password.');
       return;
     }
     setBusy(true);
     setError('');
-    saveToken(candidate);
     try {
-      await fetchJSON('/session');
-      props.onAuthenticated(candidate);
+      var response = await window.fetch('/api/v1/operator/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({ tenant_slug: slug, email: operatorEmail, password: password })
+      });
+      var body = null;
+      var text = await response.text();
+      if (text) {
+        try { body = JSON.parse(text); }
+        catch (_) { body = { detail: 'The server returned an unreadable response.' }; }
+      }
+      if (!response.ok) {
+        var requestError = new Error((body && (body.detail || body.title)) || ('HTTP ' + response.status));
+        requestError.status = response.status;
+        requestError.problem = body;
+        throw requestError;
+      }
+      if (!body || typeof body.access_token !== 'string' || !body.access_token) {
+        throw new Error('The server did not return an operator session.');
+      }
+      saveToken(body.access_token);
+      props.onAuthenticated(body.access_token);
     } catch (requestError) {
       saveToken('');
-      setError(requestError.status === 401 ? 'That admin token was not accepted.' : errorMessage(requestError));
+      setError(requestError.status === 401 ? 'Those sign-in details were not accepted.' : errorMessage(requestError));
     } finally {
       setBusy(false);
     }
@@ -667,19 +698,33 @@ function AuthGate(props) {
         h('div', { className: 'sidebar-monogram', 'aria-hidden': 'true' }, 'K'),
         h('span', { className: 'sidebar-title' }, 'Kontor')
       ),
-      h('h1', null, 'Operator access'),
-      h('p', null, 'Enter the temporary Stage 5 admin token. It stays in this browser tab and is never added to the URL.'),
+      h('h1', null, 'Operator sign in'),
+      h('p', null, 'Use the operator account created for your tenant. Your session stays in this browser tab and is never added to the URL.'),
       h('div', { className: 'field' },
-        h('label', { htmlFor: 'operator-token' }, 'Admin token'),
+        h('label', { htmlFor: 'operator-tenant' }, 'Tenant'),
         h('input', {
-          id: 'operator-token', type: 'password', autoComplete: 'current-password', value: token,
-          disabled: busy, spellCheck: 'false', onChange: function(event) { setToken(event.target.value); },
+          id: 'operator-tenant', type: 'text', autoComplete: 'organization', value: tenantSlug,
+          disabled: busy, spellCheck: 'false', autoCapitalize: 'none', onChange: function(event) { setTenantSlug(event.target.value); },
           autoFocus: true
+        })
+      ),
+      h('div', { className: 'field', style: { marginTop: 'var(--space-3)' } },
+        h('label', { htmlFor: 'operator-email' }, 'Email'),
+        h('input', {
+          id: 'operator-email', type: 'email', autoComplete: 'username', value: email,
+          disabled: busy, spellCheck: 'false', autoCapitalize: 'none', onChange: function(event) { setEmail(event.target.value); }
+        })
+      ),
+      h('div', { className: 'field', style: { marginTop: 'var(--space-3)' } },
+        h('label', { htmlFor: 'operator-password' }, 'Password'),
+        h('input', {
+          id: 'operator-password', type: 'password', autoComplete: 'current-password', value: password,
+          disabled: busy, onChange: function(event) { setPassword(event.target.value); }
         })
       ),
       error ? h('div', { className: 'auth-error', role: 'alert' }, error) : null,
       h('div', { className: 'auth-actions' },
-        h('button', { type: 'submit', className: 'primary-button', disabled: busy }, busy ? 'Checking\u2026' : 'Continue')
+        h('button', { type: 'submit', className: 'primary-button', disabled: busy }, busy ? 'Signing in\u2026' : 'Sign in')
       )
     )
   );
@@ -1651,8 +1696,17 @@ function App() {
   var setRange = rangePair[1];
 
   function logout() {
+    var sessionToken = storedToken();
     saveToken('');
     setToken('');
+    if (!sessionToken) return;
+    window.fetch(API_BASE + '/logout', {
+      method: 'POST',
+      headers: { Accept: 'application/json', Authorization: 'Bearer ' + sessionToken },
+      cache: 'no-store'
+    }).catch(function() {
+      // Local removal remains intentional when the network is unavailable.
+    });
   }
 
   React.useEffect(function() {
@@ -1686,7 +1740,7 @@ function App() {
       h('div', null,
         h(ErrorView, { error: sessionResource.error, onRetry: sessionResource.retry, title: 'Could not start the operator session' }),
         h('div', { style: { textAlign: 'center', marginTop: 'var(--space-3)' } },
-          h('button', { type: 'button', className: 'text-button', onClick: logout }, 'Use another token')
+          h('button', { type: 'button', className: 'text-button', onClick: logout }, 'Sign in again')
         )
       )
     );

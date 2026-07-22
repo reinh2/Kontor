@@ -76,8 +76,8 @@ func Build(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, logger *s
 	if err != nil {
 		return nil, err
 	}
-	logger.InfoContext(ctx, "stage 1 runtime ready",
-		"tenant_id", cfg.Tenant.ID, "tenant_mode", "fixed", "llm_provider", cfg.LLM.Provider,
+	logger.InfoContext(ctx, "tenant runtime ready",
+		"tenant_id", cfg.Tenant.ID, "tenant_mode", "scoped", "llm_provider", cfg.LLM.Provider,
 		"max_iterations", cfg.Agent.MaxIterations, "conversation_token_budget", cfg.Agent.ConversationTokenBudget)
 	return &Components{
 		Application: application, Conversations: conversationStore, Trace: traceStore,

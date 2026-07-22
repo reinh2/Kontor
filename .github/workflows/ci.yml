@@ -89,11 +89,15 @@ jobs:
             exit 1
           fi
 
-          created="$(curl --fail --silent --show-error \
+          tenant_curl() {
+            curl --resolve salon-nord.localhost:8080:127.0.0.1 "$@"
+          }
+
+          created="$(tenant_curl --fail --silent --show-error \
               --request POST \
               --header 'Content-Type: application/json' \
               --data '{"display_name":"CI Customer","email":"ci@example.com"}' \
-              http://127.0.0.1:8080/api/v1/demo/conversations)"
+              http://salon-nord.localhost:8080/api/v1/demo/conversations)"
           conversation_id="$(jq --exit-status --raw-output \
             '.conversation_id | select(type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"))' \
             <<<"$created")"
@@ -101,12 +105,12 @@ jobs:
             '.capability_token | select(type == "string" and length > 0)' \
             <<<"$created")"
 
-          proposal="$(curl --fail --silent --show-error \
+          proposal="$(tenant_curl --fail --silent --show-error \
               --request POST \
               --header 'Content-Type: application/json' \
               --header "Authorization: Bearer ${capability_token}" \
               --data '{"client_message_id":"ci-proposal-0001","text":"Book a haircut Thursday evening"}' \
-              "http://127.0.0.1:8080/api/v1/demo/conversations/${conversation_id}/messages")"
+              "http://salon-nord.localhost:8080/api/v1/demo/conversations/${conversation_id}/messages")"
           jq --exit-status \
             '.outcome == "completed" and
              (.pending_confirmation.id | type == "string" and length > 0) and
@@ -125,9 +129,9 @@ jobs:
             exit 1
           fi
 
-          proposal_trace="$(curl --fail --silent --show-error \
+          proposal_trace="$(tenant_curl --fail --silent --show-error \
               --header "Authorization: Bearer ${capability_token}" \
-              "http://127.0.0.1:8080/api/v1/demo/runs/${proposal_run_id}")"
+              "http://salon-nord.localhost:8080/api/v1/demo/runs/${proposal_run_id}")"
           jq --exit-status '
             [.tools[] | select(.iteration == 1)] as $first
             | ($first | length == 2)
@@ -143,12 +147,12 @@ jobs:
               and ($first[1].attempts[0].attempt_no == 1)
           ' <<<"$proposal_trace" >/dev/null
 
-          confirmation="$(curl --fail --silent --show-error \
+          confirmation="$(tenant_curl --fail --silent --show-error \
               --request POST \
               --header 'Content-Type: application/json' \
               --header "Authorization: Bearer ${capability_token}" \
               --data '{"client_message_id":"ci-confirmation-0002","text":"Yes, confirm"}' \
-              "http://127.0.0.1:8080/api/v1/demo/conversations/${conversation_id}/messages")"
+              "http://salon-nord.localhost:8080/api/v1/demo/conversations/${conversation_id}/messages")"
           jq --exit-status \
             '.outcome == "completed" and
              (.pending_confirmation == null) and
@@ -158,9 +162,9 @@ jobs:
             '.run_id | select(type == "string" and length > 0)' \
             <<<"$confirmation")"
 
-          confirmation_trace="$(curl --fail --silent --show-error \
+          confirmation_trace="$(tenant_curl --fail --silent --show-error \
               --header "Authorization: Bearer ${capability_token}" \
-              "http://127.0.0.1:8080/api/v1/demo/runs/${confirmation_run_id}")"
+              "http://salon-nord.localhost:8080/api/v1/demo/runs/${confirmation_run_id}")"
           jq --exit-status '
             .status == "completed"
             and any(

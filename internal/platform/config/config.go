@@ -9,7 +9,12 @@ import (
 	"time"
 )
 
+// DefaultTenantID identifies the repeatable demo tenant. It is not a runtime
+// tenant selector: Stage 6 resolves live tenants from sessions, hosts, and
+// webhook paths.
 const DefaultTenantID = "00000000-0000-4000-8000-000000000001"
+
+const demoChannelEncryptionKey = "demo-only-tenant-channel-key-32!"
 
 type Config struct {
 	Environment string
@@ -17,10 +22,14 @@ type Config struct {
 	DatabaseURL string
 	DemoMode    bool
 
+	// Tenant is used only to seed the deterministic demo business. Production
+	// traffic never reads it to select a tenant.
 	Tenant   Tenant
+	Tenancy  Tenancy
+	Demo     Demo
+	Telegram Telegram
 	Agent    Agent
 	LLM      LLM
-	Telegram Telegram
 	Operator Operator
 
 	SlotTokenSecret string
@@ -30,12 +39,9 @@ type Config struct {
 }
 
 type HTTP struct {
-	// AllowedOrigin is the single origin the widget CORS policy accepts, or
-	// "*" for the zero-key demo default. A wildcard cannot carry credentials;
-	// the demo API authorizes via a bearer token, not cookies, so this is safe.
-	AllowedOrigin string
-	// RateLimitPerMinute and RateLimitBurst bound requests from one client IP
-	// using a token bucket, protecting the bounded admission queue upstream.
+	// AllowedOrigin remains the Stage 1-5 single-tenant fallback. Stage 6
+	// widget traffic is checked against tenant_channels.widget_origin instead.
+	AllowedOrigin      string
 	RateLimitPerMinute int
 	RateLimitBurst     int
 }
@@ -47,6 +53,32 @@ type Tenant struct {
 	Timezone string
 	Currency string
 }
+
+// Tenancy holds platform-wide, non-business configuration. Each business owns
+// its own channel settings in PostgreSQL; only the host suffix and encryption
+// key remain deployment secrets.
+type Tenancy struct {
+	Enabled              bool
+	HostSuffix           string
+	ChannelEncryptionKey []byte
+}
+
+type Demo struct {
+	OwnerEmail    string
+	OwnerPassword string
+	WidgetOrigin  string
+}
+
+// Telegram holds the former deployment-wide settings only long enough to
+// adopt an explicitly named Stage 1-5 tenant. After adoption, bot credentials
+// are tenant-owned; APIBaseURL remains a deployment-wide sender endpoint.
+type Telegram struct {
+	BotToken      string
+	WebhookSecret string
+	APIBaseURL    string
+}
+
+func (t Telegram) Enabled() bool { return t.BotToken != "" && t.WebhookSecret != "" }
 
 type Agent struct {
 	MaxIterations           int
@@ -66,20 +98,10 @@ type LLM struct {
 	AppTitle        string
 }
 
-// Telegram enables the webhook channel only when both the bot token and the
-// webhook secret are present; the zero-key demo runs without either.
-type Telegram struct {
-	BotToken      string
-	WebhookSecret string
-	APIBaseURL    string
-}
-
-func (t Telegram) Enabled() bool { return t.BotToken != "" && t.WebhookSecret != "" }
-
-// Operator is the temporary Stage 5 authentication boundary. Stage 6 replaces
-// this shared bearer token with operator identities, sessions, and roles.
+// Operator replaces the Stage 5 shared admin token with durable, database
+// backed identities and opaque sessions.
 type Operator struct {
-	AdminToken string
+	SessionTTL time.Duration
 }
 
 func Load() (Config, error) {
@@ -94,6 +116,19 @@ func Load() (Config, error) {
 			Name:     env("FIXED_TENANT_NAME", "Salon Nord"),
 			Timezone: env("FIXED_TENANT_TIMEZONE", "Europe/Berlin"),
 			Currency: env("FIXED_TENANT_CURRENCY", "EUR"),
+		},
+		Tenancy: Tenancy{
+			Enabled:    envBool("MULTI_TENANT", true),
+			HostSuffix: strings.ToLower(strings.Trim(env("TENANT_HOST_SUFFIX", "localhost"), ".")),
+		},
+		Demo: Demo{
+			OwnerEmail:    env("DEMO_OWNER_EMAIL", "owner@salon-nord.test"),
+			OwnerPassword: env("DEMO_OWNER_PASSWORD", "demo-operator-password"),
+		},
+		Telegram: Telegram{
+			BotToken:      os.Getenv("TELEGRAM_BOT_TOKEN"),
+			WebhookSecret: os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
+			APIBaseURL:    env("TELEGRAM_API_BASE_URL", "https://api.telegram.org"),
 		},
 		Agent: Agent{
 			MaxIterations:           envInt("AGENT_MAX_ITERATIONS", 8),
@@ -111,14 +146,7 @@ func Load() (Config, error) {
 			AppURL:          os.Getenv("OPENROUTER_APP_URL"),
 			AppTitle:        env("OPENROUTER_APP_TITLE", "Kontor"),
 		},
-		Telegram: Telegram{
-			BotToken:      os.Getenv("TELEGRAM_BOT_TOKEN"),
-			WebhookSecret: os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
-			APIBaseURL:    env("TELEGRAM_API_BASE_URL", "https://api.telegram.org"),
-		},
-		Operator: Operator{
-			AdminToken: os.Getenv("OPERATOR_ADMIN_TOKEN"),
-		},
+		Operator:        Operator{SessionTTL: envDuration("OPERATOR_SESSION_TTL", 12*time.Hour)},
 		SlotTokenSecret: env("SLOT_TOKEN_SECRET", "demo-only-change-me-32-bytes-minimum"),
 		ShutdownTimeout: envDuration("SHUTDOWN_TIMEOUT", 35*time.Second),
 		HTTP: HTTP{
@@ -127,12 +155,45 @@ func Load() (Config, error) {
 			RateLimitBurst:     envInt("HTTP_RATE_LIMIT_BURST", 20),
 		},
 	}
+	legacyBootstrap, err := LoadLegacyTenantBootstrap(cfg.DemoMode)
+	if err != nil {
+		return Config{}, err
+	}
+	if (cfg.Telegram.BotToken == "") != (cfg.Telegram.WebhookSecret == "") {
+		return Config{}, errors.New("TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET must be set together")
+	}
+	if cfg.Telegram.Enabled() {
+		if !legacyBootstrap.Enabled {
+			return Config{}, errors.New("legacy Telegram credentials require STAGE6_BOOTSTRAP_ENABLED=true")
+		}
+		if len(cfg.Telegram.WebhookSecret) < 16 {
+			return Config{}, errors.New("TELEGRAM_WEBHOOK_SECRET must contain at least 16 bytes")
+		}
+	}
+	cfg.Demo.WidgetOrigin = env("DEMO_WIDGET_ORIGIN", fmt.Sprintf("http://%s.%s:8080", cfg.Tenant.Slug, cfg.Tenancy.HostSuffix))
+	key := os.Getenv("TENANT_CHANNEL_ENCRYPTION_KEY")
+	if key == "" && cfg.DemoMode {
+		key = demoChannelEncryptionKey
+	}
+	cfg.Tenancy.ChannelEncryptionKey = []byte(key)
 
 	if cfg.DatabaseURL == "" {
 		return Config{}, errors.New("DATABASE_URL is required")
 	}
-	if cfg.Tenant.ID != DefaultTenantID {
-		return Config{}, fmt.Errorf("FIXED_TENANT_ID is fixed to %s in the single-tenant build", DefaultTenantID)
+	if cfg.Tenant.ID == "" || cfg.Tenant.Slug == "" || cfg.Tenant.Name == "" {
+		return Config{}, errors.New("demo tenant ID, slug, and name must not be empty")
+	}
+	if _, err := time.LoadLocation(cfg.Tenant.Timezone); err != nil {
+		return Config{}, fmt.Errorf("FIXED_TENANT_TIMEZONE is invalid: %w", err)
+	}
+	if !cfg.Tenancy.Enabled {
+		return Config{}, errors.New("MULTI_TENANT=false is not supported after Stage 6")
+	}
+	if !validDNSSuffix(cfg.Tenancy.HostSuffix) {
+		return Config{}, errors.New("TENANT_HOST_SUFFIX must be a DNS suffix")
+	}
+	if len(cfg.Tenancy.ChannelEncryptionKey) != 32 {
+		return Config{}, errors.New("TENANT_CHANNEL_ENCRYPTION_KEY must contain exactly 32 bytes")
 	}
 	if cfg.Agent.MaxIterations < 1 || cfg.Agent.MaxIterations > 32 {
 		return Config{}, fmt.Errorf("AGENT_MAX_ITERATIONS must be between 1 and 32")
@@ -155,6 +216,9 @@ func Load() (Config, error) {
 	if len(cfg.SlotTokenSecret) < 32 {
 		return Config{}, errors.New("SLOT_TOKEN_SECRET must contain at least 32 bytes")
 	}
+	if cfg.Operator.SessionTTL < 5*time.Minute || cfg.Operator.SessionTTL > 30*24*time.Hour {
+		return Config{}, errors.New("OPERATOR_SESSION_TTL must be between 5 minutes and 30 days")
+	}
 	if cfg.HTTP.RateLimitPerMinute < 1 {
 		return Config{}, errors.New("HTTP_RATE_LIMIT_PER_MINUTE must be positive")
 	}
@@ -163,15 +227,6 @@ func Load() (Config, error) {
 	}
 	if cfg.HTTP.AllowedOrigin == "" {
 		return Config{}, errors.New("HTTP_ALLOWED_ORIGIN must not be empty")
-	}
-	if cfg.Operator.AdminToken != "" && (len(cfg.Operator.AdminToken) < 32 || len(cfg.Operator.AdminToken) > 512) {
-		return Config{}, errors.New("OPERATOR_ADMIN_TOKEN must contain between 32 and 512 bytes")
-	}
-	if (cfg.Telegram.BotToken == "") != (cfg.Telegram.WebhookSecret == "") {
-		return Config{}, errors.New("TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET must be set together")
-	}
-	if cfg.Telegram.Enabled() && len(cfg.Telegram.WebhookSecret) < 16 {
-		return Config{}, errors.New("TELEGRAM_WEBHOOK_SECRET must contain at least 16 bytes")
 	}
 	if cfg.LLM.Provider != "fake" && cfg.LLM.Provider != "openrouter" {
 		return Config{}, fmt.Errorf("unsupported LLM_PROVIDER %q", cfg.LLM.Provider)
@@ -187,9 +242,29 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+func validDNSSuffix(value string) bool {
+	if len(value) == 0 || len(value) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(value, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for index := 0; index < len(label); index++ {
+			character := label[index]
+			if !((character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func env(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
-		return value
+		if key != "TENANT_HOST_SUFFIX" || value != "" {
+			return value
+		}
 	}
 	return fallback
 }

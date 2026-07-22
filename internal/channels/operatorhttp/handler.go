@@ -1,8 +1,6 @@
 package operatorhttp
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,33 +12,30 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/reinhlord/kontor/internal/identity"
 )
 
 type Config struct {
-	AdminToken string
-	Session    Session
-	Now        func() time.Time
+	// Authenticator is the only operator authentication boundary. It validates
+	// opaque sessions and supplies a server-derived tenant principal.
+	Authenticator identity.SessionValidator
+	Now           func() time.Time
 }
 
 type Handler struct {
-	backend     Backend
-	adminDigest [sha256.Size]byte
-	session     Session
-	location    *time.Location
-	now         func() time.Time
-	logger      *slog.Logger
+	backend       Backend
+	authenticator identity.SessionValidator
+	location      *time.Location
+	now           func() time.Time
+	logger        *slog.Logger
 }
 
 func New(config Config, backend Backend, logger *slog.Logger) (http.Handler, error) {
 	if backend == nil {
 		return nil, errors.New("operator HTTP: nil backend")
 	}
-	if len(config.AdminToken) < 32 || len(config.AdminToken) > 512 {
-		return nil, errors.New("operator HTTP: admin token must contain between 32 and 512 bytes")
-	}
-	location, err := time.LoadLocation(config.Session.Timezone)
-	if err != nil {
-		return nil, errors.New("operator HTTP: invalid tenant timezone")
+	if config.Authenticator == nil {
+		return nil, errors.New("operator HTTP: an identity session validator is required")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -49,8 +44,8 @@ func New(config Config, backend Backend, logger *slog.Logger) (http.Handler, err
 		config.Now = time.Now
 	}
 	h := &Handler{
-		backend: backend, adminDigest: sha256.Sum256([]byte(config.AdminToken)),
-		session: config.Session, location: location, now: config.Now, logger: logger,
+		backend: backend, authenticator: config.Authenticator,
+		location: time.UTC, now: config.Now, logger: logger,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/operator/session", h.getSession)
@@ -65,8 +60,18 @@ func New(config Config, backend Backend, logger *slog.Logger) (http.Handler, err
 	return h.recover(h.noStore(h.authenticate(mux))), nil
 }
 
-func (h *Handler) getSession(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, h.session)
+func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {
+	principal, ok := identity.PrincipalFromContext(r.Context())
+	if !ok {
+		h.internalError(w, r, "operator principal missing after authentication", errors.New("principal missing"))
+		return
+	}
+	writeJSON(w, http.StatusOK, Session{
+		TenantID: principal.TenantID, TenantName: principal.TenantName,
+		Timezone: principal.Timezone, Currency: principal.Currency,
+		OperatorID: principal.OperatorID, OperatorEmail: principal.Email,
+		OperatorName: principal.DisplayName, Role: principal.Role,
+	})
 }
 
 func (h *Handler) getDashboard(w http.ResponseWriter, r *http.Request) {
@@ -171,14 +176,23 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getCalendar(w http.ResponseWriter, r *http.Request) {
+	location := h.location
+	if principal, ok := identity.PrincipalFromContext(r.Context()); ok {
+		resolved, err := time.LoadLocation(principal.Timezone)
+		if err != nil {
+			writeProblem(w, http.StatusInternalServerError, "invalid tenant timezone", "The operator session has an invalid tenant timezone")
+			return
+		}
+		location = resolved
+	}
 	fromValue := strings.TrimSpace(r.URL.Query().Get("from"))
 	toValue := strings.TrimSpace(r.URL.Query().Get("to"))
 	var fromLocal, toLocal time.Time
 	var err error
 	if fromValue == "" && toValue == "" {
-		now := h.now().In(h.location)
+		now := h.now().In(location)
 		mondayOffset := (int(now.Weekday()) + 6) % 7
-		fromLocal = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, h.location).
+		fromLocal = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location).
 			AddDate(0, 0, -mondayOffset)
 		toLocal = fromLocal.AddDate(0, 0, 7)
 	} else {
@@ -186,9 +200,9 @@ func (h *Handler) getCalendar(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, http.StatusBadRequest, "invalid calendar range", "from and to must be supplied together")
 			return
 		}
-		fromLocal, err = time.ParseInLocation("2006-01-02", fromValue, h.location)
+		fromLocal, err = time.ParseInLocation("2006-01-02", fromValue, location)
 		if err == nil {
-			toLocal, err = time.ParseInLocation("2006-01-02", toValue, h.location)
+			toLocal, err = time.ParseInLocation("2006-01-02", toValue, location)
 		}
 		if err != nil {
 			writeProblem(w, http.StatusBadRequest, "invalid calendar range", "from and to must use YYYY-MM-DD")
@@ -395,16 +409,7 @@ func validOptionalIdempotencyKey(w http.ResponseWriter, key string) bool {
 }
 
 func (h *Handler) authenticate(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := bearerToken(r.Header.Get("Authorization"))
-		presented := sha256.Sum256([]byte(token))
-		if !ok || subtle.ConstantTimeCompare(presented[:], h.adminDigest[:]) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="kontor-operator"`)
-			writeProblem(w, http.StatusUnauthorized, "unauthorized", "A valid operator Bearer token is required")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	return identity.Authenticate(h.authenticator, next)
 }
 
 func (h *Handler) noStore(next http.Handler) http.Handler {
@@ -431,17 +436,6 @@ func (h *Handler) recover(next http.Handler) http.Handler {
 func (h *Handler) internalError(w http.ResponseWriter, r *http.Request, operation string, err error) {
 	h.logger.Error(operation, "method", r.Method, "path", r.URL.Path, "error", err)
 	writeProblem(w, http.StatusInternalServerError, "operator query failed", "The requested operator data could not be loaded")
-}
-
-func bearerToken(header string) (string, bool) {
-	if len(header) > 1024 {
-		return "", false
-	}
-	fields := strings.Fields(header)
-	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") || fields[1] == "" {
-		return "", false
-	}
-	return fields[1], true
 }
 
 func allowedRunStatus(status string) bool {

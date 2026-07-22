@@ -1,20 +1,33 @@
 # Kontor
 
-**An action-taking front desk that turns a customer conversation into a safely confirmed appointment.**
+> **A self-hosted AI front desk for appointment-based businesses.**
+>
+> Kontor turns customer messages into safely confirmed appointments: it checks real availability, asks for explicit consent before changing a schedule, completes the booking, and leaves an audit trail a person can inspect.
 
-Service businesses lose bookings when a customer has to wait for opening hours, switch channels, or repeat the same details to several systems. A useful agent should do more than answer: it should find a real opening, ask before it changes anything, complete the booking, and leave an audit trail a person can inspect.
+Customers should not have to wait for opening hours, change channels, or repeat their details just to make an appointment. Kontor gives service businesses a front desk that can answer around the clock while keeping the critical decisions under server and database control—not in the model prompt.
 
-## A Thursday-evening haircut
+## What Kontor does
 
-Marta asks, “Can I get a haircut on Thursday evening?” Kontor checks the service catalogue, eligible staff, working hours, breaks, existing bookings, and time zones, then returns a real opening. When Marta chooses a time, Kontor shows the exact appointment and waits for an explicit confirmation before it writes the booking.
+| Capability | How it helps |
+| --- | --- |
+| **Safe scheduling** | Finds slots across services, staff, working hours, breaks, buffers, busy periods, and IANA time zones—including DST changes. |
+| **Explicit confirmation** | Shows the exact appointment before creating, rescheduling, or cancelling it. A model cannot silently mutate the calendar. |
+| **Customer channels** | Offers an embeddable browser widget with durable SSE updates and a Telegram webhook, both powered by the same booking core. |
+| **Operator workspace** | Provides a live dashboard, run history, nested agent traces, and a weekly calendar with create, reschedule, and cancel actions. |
+| **Reliable follow-up** | Queues CRM and reminder work transactionally with a confirmed booking, then processes it through a retrying worker. |
+| **Inspectable AI** | Persists conversations, model iterations, tool calls, retries, token usage, escalations, and failures for review. |
 
-The wider business flow continues by updating the customer in the CRM and sending a reminder. Those two hand-offs are visible in the product designs below, but they are not implemented in the current runtime: today’s executable demo finishes with a persisted Kontor customer, a confirmed booking, and a trace of the agent run. This distinction is intentional—this README describes the code that exists, not the roadmap as if it had shipped.
+## A booking in practice
+
+A customer writes: *“Can I get a haircut on Thursday evening?”* Kontor checks the catalogue, eligible staff, opening hours, breaks, existing bookings, and time zone rules. It offers only real openings. When the customer selects a slot, Kontor presents the exact appointment and waits for an unambiguous confirmation before it writes anything to the schedule.
+
+The same guardrails apply when an appointment is moved or cancelled. Once a booking is confirmed, durable jobs can update CRM records and send reminders without risking a lost side effect.
 
 ## Screens
 
 ![Agent trace showing a customer conversation beside the model and tool timeline](docs/img/trace-live-full@2x.png)
 
-*Agent trace design — the conversation and every model/tool step share one timeline. The shown 2.94 s run, nested retry, CRM step, and confirmation sender are fixture data; the backend currently persists model calls, tool calls, nested attempts, token usage, and total run duration.*
+*One timeline for the customer conversation, the agent's reasoning steps, tool calls, retries, and outcomes.*
 
 <table>
   <tr>
@@ -22,43 +35,33 @@ The wider business flow continues by updating the customer in the CRM and sendin
     <td width="50%"><img src="docs/img/dashboard-live@2x.png" alt="Operator dashboard with booking and agent metrics"></td>
   </tr>
   <tr>
-    <td><em>Customer chat design — a human-readable confirmation sits between choosing a slot and creating the booking.</em></td>
-    <td><em>Operator dashboard design — business outcomes and agent health in one view. The displayed 2.9 s median run latency is seeded fixture data, not a production benchmark.</em></td>
+    <td><em>Customer chat — a human-readable confirmation separates choosing a slot from creating a booking.</em></td>
+    <td><em>Operator dashboard — booking outcomes and agent health in one place.</em></td>
   </tr>
   <tr>
     <td colspan="2"><img src="docs/img/calendar-week-full@2x.png" alt="Week calendar for three staff members"></td>
   </tr>
   <tr>
-    <td colspan="2"><em>Calendar design — bookings, breaks, time off, status changes, and conflicts are visible in the weekly operating view.</em></td>
+    <td colspan="2"><em>Weekly calendar — operators can inspect and manage real appointments.</em></td>
   </tr>
 </table>
 
-The images are static exports from [`design/screens`](design/screens). The browser application at `/operator` now replaces those fixture values with authenticated live reads for the dashboard, runs, nested traces, and week calendar. Calendar create/reschedule/cancel commands remain the next Stage 5 slice.
+The images are static exports from [`design/screens`](design/screens). The application serves an authenticated operator console at `/operator` and an embeddable customer widget from the same API binary.
 
-## What it does
+## Why it is safe
 
-- Runs the haircut flow locally without an API key through a deterministic model substitute, or through the real OpenRouter Chat Completions adapter added in Stage 1. The OpenRouter path sends the exact tool schemas, accepts tool calls, and retries bounded transient provider failures.
-- Lists services and eligible staff, then calculates slots on a 15-minute grid across working hours, breaks, booking buffers, busy periods, and IANA time zones, including daylight-saving transitions.
-- Rejects searches and bookings outside the temporal safety window: 15 minutes of minimum lead time, a 365-day booking horizon, and a 31-day maximum search range. Booking creation also rechecks against the PostgreSQL clock so a queued request cannot cross into the past.
-- Requires a server-authorized, argument-bound confirmation before creating a booking. Slot offers expire after 5 minutes; confirmation proposals have a 10-minute ceiling and cannot outlive the slot offer.
-- Rechecks availability inside a serializable transaction and uses both a per-staff/day lock and a PostgreSQL exclusion constraint to prevent double-booking.
-- Makes booking requests idempotent, so a repeated client request returns the original booking instead of creating another one.
-- Handles multiple tool calls returned in one model response. Calls are processed sequentially in response order and all results are appended before the next model request; after a terminal refusal or human hand-off, remaining siblings are traced as skipped and are never executed.
-- Persists customers, conversations, messages, agent runs, model iterations, parent tool calls, one-based child retry attempts, bookings, booking events, escalations, and dead-letter events in PostgreSQL.
-- Exposes a small JSON demo API. Conversation creation returns an opaque, conversation-scoped bearer capability once; sending messages and reading traces require it, and only its SHA-256 digest is stored.
-- Enforces a persisted 50,000-token hard cap per conversation by atomically reserving a conservative allowance—including the provider's worst-case retry count—before every model request and settling aggregate usage afterward.
-- Requires every customer-facing reply to arrive through a structured `respond_to_customer` terminal call, so a reply's disposition is data the server acts on: a persisted per-conversation counter forces a human hand-off after three consecutive clarification outcomes, and an escalated conversation acknowledges later messages without starting any agent run.
-- Executes `escalate_to_human` as a durable hand-off. Provider and bounded-loop failures return a safe customer message, create an escalation, and retain a dead-letter event for inspection or replay.
-- Bounds each turn to 8 model iterations and 25 seconds by default. Retryable tool failures get at most 3 attempts, each with a 5-second timeout and capped exponential backoff; OpenRouter requests separately get at most 3 attempts within one provider deadline.
-- Serves an embeddable chat widget as one `<script>` tag straight from the API binary. It renders inside a closed shadow root so host-page styles cannot leak in, holds the conversation capability in `sessionStorage`, streams replies over SSE, and shows the same confirm-before-book card the JSON API returns.
-- Streams every committed turn over a durable per-conversation SSE channel. Each event is written in the same transaction as the reply it describes and carries a monotonic id, so a reconnecting client resumes from `Last-Event-ID` without gaps or duplicates and never observes an outcome that later disappears.
-- Accepts Telegram Bot API webhooks behind a constant-time secret check, binds each private chat to one conversation, and deduplicates redelivered updates through a persisted `update_id` so a retry acknowledges without running a second agent turn. Outbound replies retry transient Bot API failures with bounded backoff.
-- Protects the turn-admission queue with a per-client-IP token-bucket rate limiter (60 requests per minute, burst 20 by default) and a configurable CORS policy for the widget origin; liveness and readiness probes bypass the limiter.
-- Serves a live operator console for dashboard aggregates, filtered/keyset-paginated runs, full conversation and nested tool-attempt traces, and tenant-timezone calendar reads. Its API is disabled unless an explicit 32+ byte `OPERATOR_ADMIN_TOKEN` is configured, uses constant-time bearer verification, never accepts a browser-supplied tenant, is excluded from the widget's CORS policy, and returns no-store responses. React is pinned and embedded in the API binary so the page that handles this token executes no CDN scripts.
+Kontor treats an LLM as an untrusted planner, not as the owner of customer identity or scheduling authority.
+
+- **Propose, then act.** A mutation starts as a saved proposal. Only a later customer confirmation authorizes its frozen arguments.
+- **Server-side authorization.** Every customer conversation receives an opaque, scoped capability token; only its SHA-256 digest is stored. Model-supplied identity data never controls a booking.
+- **Database-enforced consistency.** PostgreSQL serializable transactions, schedule locks, idempotency keys, and an exclusion constraint are the final protection against double bookings.
+- **Bounded autonomy.** The agent has strict limits for iterations, execution time, retries, and a persisted per-conversation token budget. Failure becomes a safe escalation rather than an unbounded loop.
+- **Durable delivery.** Committed customer turns are stored before SSE delivery, so reconnecting widgets can resume from `Last-Event-ID` without gaps or phantom outcomes.
+- **Human hand-off.** A customer can request a person, and controlled failures or repeated clarification needs produce a persisted escalation for follow-up.
 
 ## Quick start
 
-You need Docker with Compose. The default Compose profile sets `DEMO_MODE=true` and `LLM_PROVIDER=fake`, so it does not need an LLM API key.
+**Goal:** start the repeatable local demo and make a tenant-scoped customer request. You need Docker with Compose. The default configuration uses a deterministic local model adapter, so an LLM API key is not required.
 
 ```sh
 git clone https://github.com/reinh2/kontor.git
@@ -66,66 +69,116 @@ cd kontor
 docker compose up --build
 ```
 
-The service listens on `http://localhost:8080`; [the health endpoint](http://localhost:8080/healthz) returns JSON when startup is complete. The conversation endpoints are under `/api/v1/demo`, and `/readyz` exposes database readiness. `POST /api/v1/demo/conversations` returns a `capability_token` only in its creation response. Pass it as `Authorization: Bearer <capability_token>` when sending messages, streaming that conversation's events, or reading its run traces.
+When startup completes:
 
-Open [the widget demo page](http://localhost:8080/widget/v1/demo) to try the embeddable chat in a browser; it loads the same `/widget/v1/kontor.js` you would drop into a host site with one `<script>` tag. Connected widgets receive each committed turn over `GET /api/v1/demo/conversations/{id}/events`. To enable the Telegram channel, set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` and register the bot's webhook at `/webhooks/v1/telegram`; without both, the channel stays disabled and the route is not mounted.
+- Open the browser widget at [http://salon-nord.localhost:8080/widget/v1/demo](http://salon-nord.localhost:8080/widget/v1/demo). The tenant is selected from the `salon-nord.localhost` host, not from a request parameter.
+- Check API health at [http://localhost:8080/healthz](http://localhost:8080/healthz); `/readyz` additionally verifies PostgreSQL readiness.
+- Use the demo conversation API under `/api/v1/demo` on the tenant host. Creating a conversation returns its `capability_token` once; supply it as `Authorization: Bearer <capability_token>` for subsequent messages, events, and traces.
 
-To enable the in-progress Stage 5 console, set `OPERATOR_ADMIN_TOKEN` to a random value between 32 and 512 bytes before starting Compose, then open [the operator page](http://localhost:8080/operator) and enter that value. The token is kept only in the current tab's `sessionStorage`; if the variable is absent, the operator API is not mounted. This first live slice is read-only by design while the Stage 4 scheduling lifecycle is hardened for admin actors and optimistic concurrency.
+### Tenant provisioning, operator identity, and channels
 
-To exercise real tool-calling behavior, copy [`.env.example`](.env.example), set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and `OPENROUTER_MODEL`, then restart Compose. This switches the same bounded agent loop and server-side tool gateway from the deterministic adapter to OpenRouter; it does not bypass confirmation, capabilities, budgets, or scheduling checks.
+Stage 6 provisions a complete tenant atomically through `POST /api/v1/tenants`. The request must contain tenant identity (`slug`, `name`, `timezone`, `currency`), an owner account, at least one service and staff member with availability, and a canonical root `channels.widget_origin`. Telegram is optional; when enabled, both Telegram channel values are required. A successful response is `201 Created` with tenant metadata and never includes Telegram credentials. Invalid or incomplete input is `400`, a duplicate tenant is `409`, and there is no provisioning idempotency key: a retry after an indeterminate outcome may return `409` if the original request committed.
+
+Operators sign in with `POST /api/v1/operator/login` using `tenant_slug`, `email`, and `password`. A successful `200` returns a one-time opaque `access_token`, `token_type: Bearer`, `expires_at`, and tenant/operator session facts. Invalid credentials return `401`; each successful login creates a session and is not idempotent. The server stores only a token digest and derives the tenant from the session for protected calls.
+
+Owner-only APIs are `GET`/`PUT /api/v1/operator/channels`, `POST /api/v1/operator/operators`, `POST /api/v1/operator/catalog/services`, `POST /api/v1/operator/staff`, and `POST /api/v1/operator/staff/{staffID}/availability`. They require `Authorization: Bearer <access_token>`; a missing or invalid session is `401` and a staff session is `403`. The tenant comes from the session, so a request body cannot select another tenant. Logout is `POST /api/v1/operator/logout`; it returns `204` after revoking the submitted bearer session.
+
+Public widget and conversation routes resolve the tenant from the first label of `<tenant-slug>.<TENANT_HOST_SUFFIX>`. An unknown host returns `404`. Browser requests must match the tenant's configured widget origin; a mismatch returns `403` before conversation data is read. Operator, onboarding, and widget routes have separate HTTP edges, so widget CORS does not apply to operator or provisioning APIs.
+
+A configured Telegram tenant receives updates at `POST /webhooks/v1/telegram/{tenantSlug}`. The path slug resolves the tenant; the body, chat ID, and headers cannot choose a different one. The webhook validates the tenant's configured secret and returns `404` for an unknown, disabled, or invalidly authenticated tenant. Updates are deduplicated per tenant and update ID; a duplicate returns `200`. A tenant-runtime or persistence failure returns `500` before the update is claimed, allowing Telegram to retry. Bot tokens are encrypted at rest, webhook secrets are stored as digests, and channel read responses do not expose either value.
+
+### Configuration for deployment owners
+
+| Setting | Required/default | Consequence |
+| --- | --- | --- |
+| `MULTI_TENANT` | Defaults to `true`; `false` is rejected. | Stage 6 always uses tenant boundaries. |
+| `TENANT_HOST_SUFFIX` | Defaults to `localhost`; must be a valid DNS suffix. | It defines the public tenant host form. A host outside the suffix cannot resolve a tenant. |
+| `TENANT_CHANNEL_ENCRYPTION_KEY` | Exactly 32 bytes. A demo-only default exists only in demo mode; non-demo deployments must provide it. | Startup fails without a valid key; enabled Telegram bot tokens are encrypted with it. |
+| `OPERATOR_SESSION_TTL` | Defaults to `12h`; accepted range is 5 minutes to 30 days. | Expired or revoked sessions cannot access protected operator routes. |
+| Tenant `channels.widget_origin` | Required at provisioning and canonicalized to an HTTP(S) root origin. | It is the tenant-specific browser CORS allow-list. |
+
+### One-time legacy tenant adoption
+
+This runbook is for deployment owners adopting a tenant that existed before Stage 6. It is **non-demo only** and is not a general owner-reset mechanism.
+
+1. Confirm the target is the intended legacy tenant and has no existing Stage 6 channel or operator configuration. Adoption is atomic for the target tenant only.
+2. Enable the path with `STAGE6_BOOTSTRAP_ENABLED=true` and provide all required variables. Do not place their values in documentation or source control:
+   - `STAGE6_BOOTSTRAP_ENABLED`
+   - `STAGE6_BOOTSTRAP_TENANT_ID`
+   - `STAGE6_BOOTSTRAP_TENANT_SLUG`
+   - `STAGE6_BOOTSTRAP_WIDGET_ORIGIN`
+   - `STAGE6_BOOTSTRAP_OWNER_EMAIL`
+   - `STAGE6_BOOTSTRAP_OWNER_DISPLAY_NAME`
+   - `STAGE6_BOOTSTRAP_OWNER_PASSWORD`
+3. Start the API after migrations. A successful run logs `legacy Stage 6 tenant bootstrap completed` with the target tenant ID and whether a write was applied. An exact replay is a no-write success.
+4. Remove **all** `STAGE6_BOOTSTRAP_*` variables immediately after success and restart normally.
+
+The bootstrap is rejected when `DEMO_MODE=true`, when it is not enabled but fields are present, or when any required field is missing. It fails closed for a configured tenant and does not mutate that tenant. There is no default-owner auto-repair or documented reverse operation; on failure, inspect the startup error and tenant state, correct the configuration, and retry only the same intended adoption.
+
+### Optional integrations
+
+- **OpenRouter:** copy [`.env.example`](.env.example), set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and `OPENROUTER_MODEL`, then restart Compose. The same confirmation, authorization, budget, and scheduling rules remain in force.
+- **Operator console:** open [http://localhost:8080/operator](http://localhost:8080/operator), then use the tenant-local owner or staff session created through provisioning and login. The Stage 5 shared administrator token is not used by Stage 6.
+- **Telegram:** configure a tenant's channel through the owner-only channel API, then register its tenant-specific webhook path. There is no process-wide Telegram bot or webhook-secret configuration for tenant traffic.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    Widget["Embeddable widget"] --> Edge
-    Telegram["Telegram webhook"] --> Edge
-    Client["Demo API client"] --> Edge
-    Operator["Operator console"] --> OperatorAPI["Same-origin operator API<br/>admin bearer token"]
-    Edge["HTTP edge<br/>CORS + rate limit"] --> App["Conversation service"]
-    App --> Runner["Bounded agent runner"]
+    Widget["Embeddable widget"] --> Public["Public tenant edge<br/>host + widget Origin"]
+    Customer["Customer API client"] --> Public
+    Telegram["Telegram webhook<br/>tenant slug path"] --> TelegramEdge["Tenant Telegram edge"]
+    Provisioning["Tenant provisioning"] --> Onboarding["Onboarding and login API"]
+    Operator["Owner or staff"] --> Session["Opaque session<br/>RBAC API"]
+    Public --> Runtime["Tenant-scoped conversation service"]
+    TelegramEdge --> Runtime
+    Runtime --> Runner["Bounded agent runner"]
     Runner <--> Model["Deterministic demo<br/>or OpenRouter"]
-    Runner --> Executor["Retrying tool executor"]
-    Executor --> Gateway["Schema, capability,<br/>and confirmation gateway"]
-    Gateway --> Schedule["Scheduling engine<br/>and repository"]
+    Runner --> Gateway["Schema, capability,<br/>and confirmation gateway"]
+    Gateway --> Schedule["Tenant-scoped scheduling"]
     Schedule --> DB[(PostgreSQL)]
-    App --> DB
-    App --> Events["Durable turn events"]
+    Onboarding --> DB
+    Session --> DB
+    Runtime --> Events["Durable turn events"]
     Events --> DB
     Events -. SSE replay .-> Widget
-    Runner --> Trace["Trace and token budget"]
+    Runtime --> Trace["Trace and token budget"]
     Trace --> DB
-    OperatorAPI --> Trace
-    OperatorAPI --> DB
-    Exports["Static UX exports"] -. define the visual language .-> Operator
+    Worker["Durable worker"] --> DB
+    Worker --> CRM["CRM adapter"]
+    Worker --> Notify["Notification adapter"]
 ```
 
-The model can request actions, but it never owns identity, authorization, or the final scheduling decision. See [Engineering notes](docs/ENGINEERING.md) for the runtime path, persistence model, failure semantics, and test strategy.
+The runtime is written in Go and uses PostgreSQL as the source of truth. Stage 6 creates tenant, owner, catalogue, staff, availability, and channel data in one transaction; server-held sessions and host/session/webhook-slug resolution bind later requests to that tenant. A bounded agent loop works with either a deterministic demonstration adapter or OpenRouter's Chat Completions API. The system exposes an allowlisted JSON Schema tool gateway and keeps business authority in server code and database transactions.
 
-## Design decisions
+## Current scope
 
-- **Scope one tenant without erasing tenancy.** Every business key retains `tenant_id`, but this build resolves one fixed tenant from configuration and intentionally has no tenant onboarding or tenant-management UI.
-- **Grow the schema one stage at a time.** The Stage 1 migration contained only data needed then that also carried forward. Channel delivery arrived with Stage 2 as a durable turn-event stream and a Telegram update-dedupe table; reminder/outbox, CRM, identity, billing, and operator-UI tables still arrive with the stage that uses them instead of being pre-created.
-- **Propose, then act.** A mutating tool first returns an exact summary. A later, unambiguous customer message authorizes only those frozen arguments.
-- **Keep authority outside the prompt.** Tenant, customer profile, conversation, inbound-message identity, and capabilities are resolved from persisted server state rather than model-authored JSON; model-supplied customer details are never used for a booking.
-- **Make the database the final arbiter.** Signed slot tokens improve the hand-off, but the booking transaction still locks and rechecks the schedule before inserting.
-- **Consume complete model responses safely.** If a response contains several tool calls, the loop handles them sequentially in response order before asking the model again. A refusal or successful hand-off is terminal for that batch, so later calls are recorded as skipped rather than executed.
-- **Bound autonomy and spend.** Iteration, time, output-token, provider-retry, tool-retry, and persisted conversation-token limits turn failure into a controlled escalation rather than an unbounded loop.
-- **Record the parent action and its attempts.** Each model-emitted tool call has one `tool_executions` parent; retries are nested `tool_execution_attempts` numbered from 1, matching the expandable trace design.
-- **Fail visibly after saving input.** Provider and agent-loop failures leave the inbound message, safe fallback, escalation, failed run trace, and dead-letter event in durable storage.
+Kontor currently includes the capabilities developed across stages 1–6:
 
-## Limitations
+- Tenant provisioning, tenant-local owner and staff accounts, opaque operator sessions, and owner-only configuration, catalogue, staff, and availability mutations.
+- Public tenant isolation by host and widget origin, plus tenant-scoped Telegram webhooks and credentials.
+- End-to-end appointment creation, rescheduling, cancellation, idempotency, and booking-event audit history.
+- An embedded widget, durable SSE, CORS and rate-limit protection, a live operator workspace, and persisted agent traces.
+- Transactional outbox jobs for reminders and CRM updates, a retrying worker, a log-backed notifier, and CRM adapters including an optional HubSpot integration.
 
-Kontor is a demonstration project, not a production booking service.
+It remains a **demonstration project, not a production booking service**. In particular:
 
-- It runs as one fixed demo tenant (`Salon Nord`); there is no user identity system, tenant onboarding, or tenant-management UI. The demo API does enforce a generated bearer capability on each conversation after creation, but that is not a full authentication or account system.
-- The operator dashboard, runs, trace viewer, and calendar reads are live when the opt-in admin token is configured. Operator identity/RBAC arrives in Stage 6, and Stage 5 calendar write commands are not exposed yet.
-- `list_services`, `list_staff`, `find_slots`, `create_booking`, and `escalate_to_human` execute. Rescheduling, cancellation, and CRM contact/deal contracts remain allowlisted but return `NOT_IMPLEMENTED` for later stages.
-- There is no HubSpot or CSV CRM adapter in this codebase yet, and no outbound email, SMS, or reminder sender. A customer row is stored in Kontor’s own database only.
-- Calendar synchronization is currently a `noop`; PostgreSQL is the appointment source of truth for the demo.
-- Explicit requests for a person, server-side tool refusals, and three consecutive structured clarification outcomes are all enforced hand-offs backed by persisted server state; the model cannot avoid the third-clarification hand-off except by actually resolving the request.
-- The live dashboard aggregates run duration and token counts from PostgreSQL. It deliberately reports total tokens rather than a currency cost because provider pricing is not persisted.
-- The default secret and database credentials are demo values and must not be used outside a local environment.
+- The fixed `Salon Nord` configuration seeds the repeatable demo; public traffic is tenant-resolved at runtime and Stage 6 has no shared administrator token.
+- External calendar synchronization is currently a no-op; PostgreSQL is the appointment source of truth.
+- The default model is deterministic and local. OpenRouter is available, but selecting and operating a production model requires real-world evaluation and cost controls.
+- Production readiness—multi-instance operation, observability, backup and restore, privacy/data-retention processes, security hardening, load testing, and production deployment—is still planned work.
+
+See the [Russian roadmap](ROADMAP_RU.md), [English roadmap](ROADMAP.md), [product scope](docs/product.md), and [architecture](docs/architecture.md) for the current documented scope and design.
+
+## Development
+
+```sh
+make test
+make test-race
+TEST_DATABASE_URL='postgres://…' make test-integration
+```
+
+The default suite covers scheduling, confirmations, bounded agent behavior, token accounting, tools, channels, traces, and operator APIs. PostgreSQL-backed integration tests run when `TEST_DATABASE_URL` is set.
 
 ## Licence
 

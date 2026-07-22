@@ -102,7 +102,7 @@ func (h *Handler) createConversation(w http.ResponseWriter, r *http.Request) {
 		"capability_token": created.CapabilityToken,
 		"customer_id":      created.CustomerID,
 		"token_budget":     created.TokenBudget,
-		"tenant_scope":     "fixed",
+		"tenant_scope":     "host",
 	})
 }
 

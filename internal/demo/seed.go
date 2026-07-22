@@ -23,24 +23,42 @@ type Tenant struct {
 	Slug     string
 	Name     string
 	Timezone string
+	Currency string
 }
 
+// EnsureFixedTenant creates or updates the demo tenant and its Stage 6 channel
+// row in one transaction. Migrations run before a custom demo tenant is
+// created, so the migration backfill alone cannot guarantee that channel row.
 func EnsureFixedTenant(ctx context.Context, pool *pgxpool.Pool, tenant Tenant) error {
-	_, err := pool.Exec(ctx, `
-		INSERT INTO tenants(id,slug,name,timezone)
-		VALUES($1,$2,$3,$4)
-		ON CONFLICT(id) DO UPDATE SET
-			slug=excluded.slug,name=excluded.name,timezone=excluded.timezone,updated_at=now()`,
-		tenant.ID, tenant.Slug, tenant.Name, tenant.Timezone)
+	tx, err := pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("ensure fixed tenant: %w", err)
+		return fmt.Errorf("begin fixed tenant: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO tenants(id,slug,name,timezone,currency)
+		VALUES($1,$2,$3,$4,$5)
+		ON CONFLICT(id) DO UPDATE SET
+			slug=excluded.slug,name=excluded.name,timezone=excluded.timezone,
+			currency=excluded.currency,updated_at=now()`,
+		tenant.ID, tenant.Slug, tenant.Name, tenant.Timezone, tenant.Currency); err != nil {
+		return fmt.Errorf("upsert fixed tenant: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO tenant_channels(tenant_id) VALUES($1)
+		ON CONFLICT (tenant_id) DO NOTHING`, tenant.ID); err != nil {
+		return fmt.Errorf("ensure fixed tenant channels: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit fixed tenant: %w", err)
 	}
 	return nil
 }
 
 // SeedCatalog installs deterministic, repeatable Stage 1 data. It deliberately
 // seeds catalog and availability only; conversations and bookings stay real.
-func SeedCatalog(ctx context.Context, pool *pgxpool.Pool, tenantID string) error {
+func SeedCatalog(ctx context.Context, pool *pgxpool.Pool, tenantID, currency string) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin demo seed: %w", err)
@@ -51,17 +69,17 @@ func SeedCatalog(ctx context.Context, pool *pgxpool.Pool, tenantID string) error
 		INSERT INTO services
 			(tenant_id,id,slug,name,description,duration_minutes,buffer_before_minutes,buffer_after_minutes,price_minor,currency)
 		VALUES
-			($1,$2,'haircut','Haircut','A standard appointment',45,0,10,4500,'EUR'),
-			($1,$3,'beard-trim','Beard trim','A short appointment',20,0,5,2500,'EUR'),
-			($1,$4,'colour','Colour','A longer appointment',90,10,15,9000,'EUR'),
-			($1,$5,'kids-cut','Kids cut','A compact appointment',30,0,5,3000,'EUR')
+			($1,$2,'haircut','Haircut','A standard appointment',45,0,10,4500,$6),
+			($1,$3,'beard-trim','Beard trim','A short appointment',20,0,5,2500,$6),
+			($1,$4,'colour','Colour','A longer appointment',90,10,15,9000,$6),
+			($1,$5,'kids-cut','Kids cut','A compact appointment',30,0,5,3000,$6)
 		ON CONFLICT (tenant_id,id) DO UPDATE SET
 			name=excluded.name, description=excluded.description,
 			duration_minutes=excluded.duration_minutes,
 			buffer_before_minutes=excluded.buffer_before_minutes,
 			buffer_after_minutes=excluded.buffer_after_minutes,
 			price_minor=excluded.price_minor, currency=excluded.currency, active=true`,
-		tenantID, HaircutServiceID, BeardServiceID, ColourServiceID, KidsServiceID,
+		tenantID, HaircutServiceID, BeardServiceID, ColourServiceID, KidsServiceID, currency,
 	); err != nil {
 		return fmt.Errorf("seed services: %w", err)
 	}

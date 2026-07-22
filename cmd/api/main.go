@@ -14,14 +14,17 @@ import (
 	"github.com/reinhlord/kontor/db/migrations"
 	"github.com/reinhlord/kontor/internal/bootstrap"
 	"github.com/reinhlord/kontor/internal/channels/demohttp"
+	"github.com/reinhlord/kontor/internal/channels/onboardinghttp"
 	"github.com/reinhlord/kontor/internal/channels/operatorhttp"
 	"github.com/reinhlord/kontor/internal/channels/telegram"
+	"github.com/reinhlord/kontor/internal/channels/tenanthttp"
 	"github.com/reinhlord/kontor/internal/demo"
+	"github.com/reinhlord/kontor/internal/identity"
 	"github.com/reinhlord/kontor/internal/platform/config"
 	"github.com/reinhlord/kontor/internal/platform/database"
 	"github.com/reinhlord/kontor/internal/platform/httpx"
 	"github.com/reinhlord/kontor/internal/platform/logging"
-	"github.com/reinhlord/kontor/internal/scheduling"
+	"github.com/reinhlord/kontor/internal/tenants"
 )
 
 func main() {
@@ -37,6 +40,8 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+const legacyComposeDemoWidgetOrigin = "http://salon-nord.localhost:8080"
 
 func run() error {
 	cfg, err := config.Load()
@@ -56,66 +61,99 @@ func run() error {
 	if err := database.ApplyMigrations(ctx, pool, migrations.Files, "."); err != nil {
 		return err
 	}
-	if err := demo.EnsureFixedTenant(ctx, pool, demo.Tenant{
-		ID: cfg.Tenant.ID, Slug: cfg.Tenant.Slug, Name: cfg.Tenant.Name, Timezone: cfg.Tenant.Timezone,
-	}); err != nil {
-		return err
-	}
 	if cfg.DemoMode {
-		if err := demo.SeedCatalog(ctx, pool, cfg.Tenant.ID); err != nil {
+		if err := demo.EnsureFixedTenant(ctx, pool, demo.Tenant{
+			ID: cfg.Tenant.ID, Slug: cfg.Tenant.Slug, Name: cfg.Tenant.Name,
+			Timezone: cfg.Tenant.Timezone, Currency: cfg.Tenant.Currency,
+		}); err != nil {
+			return err
+		}
+		if err := demo.SeedCatalog(ctx, pool, cfg.Tenant.ID, cfg.Tenant.Currency); err != nil {
 			return err
 		}
 	}
 
-	components, err := bootstrap.Build(ctx, cfg, pool, logger)
+	tenantStore, err := tenants.NewStore(pool, tenants.Config{ChannelEncryptionKey: cfg.Tenancy.ChannelEncryptionKey})
 	if err != nil {
 		return err
 	}
-	publicRoutes := http.NewServeMux()
-	publicRoutes.Handle("/", demohttp.New(components.Application, components.Trace, pool, logger))
-	if cfg.Telegram.Enabled() {
-		sender, err := telegram.NewBotAPISender(telegram.BotAPIConfig{
-			Token: cfg.Telegram.BotToken, BaseURL: cfg.Telegram.APIBaseURL,
+	identityStore, err := identity.NewStore(pool, identity.Config{SessionTTL: cfg.Operator.SessionTTL})
+	if err != nil {
+		return err
+	}
+	legacyBootstrap, err := config.LoadLegacyTenantBootstrap(cfg.DemoMode)
+	if err != nil {
+		return err
+	}
+	if legacyBootstrap.Enabled {
+		bootstrapCtx, cancelBootstrap := context.WithTimeout(ctx, 10*time.Second)
+		defer cancelBootstrap()
+		result, err := tenantStore.BootstrapLegacyTenant(bootstrapCtx, tenants.LegacyBootstrapInput{
+			TenantID: legacyBootstrap.TenantID, TenantSlug: legacyBootstrap.TenantSlug,
+			WidgetOrigin: legacyBootstrap.WidgetOrigin,
+			Owner: tenants.OwnerInput{
+				Email: legacyBootstrap.OwnerEmail, DisplayName: legacyBootstrap.OwnerDisplayName,
+				Password: legacyBootstrap.OwnerPassword,
+			},
+			Telegram: tenants.ChannelConfig{
+				TelegramEnabled:       cfg.Telegram.Enabled(),
+				TelegramBotToken:      cfg.Telegram.BotToken,
+				TelegramWebhookSecret: cfg.Telegram.WebhookSecret,
+			},
 		})
 		if err != nil {
-			return err
+			return fmt.Errorf("bootstrap legacy Stage 6 tenant: %w", err)
 		}
-		webhook, err := telegram.NewWebhook(telegram.Config{
-			TenantID:      cfg.Tenant.ID,
-			WebhookSecret: cfg.Telegram.WebhookSecret,
-			TokenBudget:   int(cfg.Agent.ConversationTokenBudget),
-		}, pool, components.Application, components.Conversations, sender, logger)
+		logger.Info("legacy Stage 6 tenant bootstrap completed", "tenant_id", legacyBootstrap.TenantID, "applied", result.Applied)
+	}
+	if cfg.DemoMode {
+		channels, err := tenantStore.ChannelConfig(ctx, cfg.Tenant.ID)
 		if err != nil {
 			return err
 		}
-		publicRoutes.Handle("POST /webhooks/v1/telegram", webhook)
-		logger.Info("telegram webhook channel enabled")
+		shouldSetWidgetOrigin := channels.WidgetOrigin == "" ||
+			(channels.WidgetOrigin == legacyComposeDemoWidgetOrigin && cfg.Demo.WidgetOrigin != legacyComposeDemoWidgetOrigin)
+		if shouldSetWidgetOrigin {
+			if err := tenantStore.UpdateChannels(ctx, cfg.Tenant.ID, tenants.ChannelConfig{WidgetOrigin: cfg.Demo.WidgetOrigin}); err != nil {
+				return err
+			}
+		}
+		if _, err := identityStore.EnsureOperator(ctx, identity.CreateOperatorInput{
+			TenantID: cfg.Tenant.ID, Email: cfg.Demo.OwnerEmail, DisplayName: "Demo owner",
+			Password: cfg.Demo.OwnerPassword, Role: identity.RoleOwner,
+		}); err != nil {
+			return err
+		}
 	}
+
+	runtime, err := bootstrap.NewRuntime(cfg, pool, tenantStore, logger)
+	if err != nil {
+		return err
+	}
+	publicRoutes, err := demohttp.NewMultiTenant(runtime, pool, logger)
+	if err != nil {
+		return err
+	}
+	onboardingHandler, err := onboardinghttp.New(tenantStore, identityStore)
+	if err != nil {
+		return err
+	}
+	operatorStore, err := operatorhttp.NewMultiTenantPostgreSQL(pool)
+	if err != nil {
+		return err
+	}
+	operatorHandler, err := operatorhttp.New(operatorhttp.Config{Authenticator: identityStore}, operatorStore, logger)
+	if err != nil {
+		return err
+	}
+	webhook, err := telegram.NewMultiTenantWebhook(pool, runtime, tenantStore, cfg.Telegram.APIBaseURL, int(cfg.Agent.ConversationTokenBudget), logger)
+	if err != nil {
+		return err
+	}
+
 	limiter := httpx.NewRateLimiter(cfg.HTTP.RateLimitPerMinute, cfg.HTTP.RateLimitBurst)
-	var operatorHandler http.Handler
-	if cfg.Operator.AdminToken != "" {
-		operatorCommands := scheduling.NewPGXRepository(pool, cfg.Tenant.ID)
-		operatorStore, err := operatorhttp.NewPostgreSQL(
-			pool, components.Trace, operatorCommands, cfg.Tenant.ID, cfg.Tenant.Timezone,
-		)
-		if err != nil {
-			return err
-		}
-		operatorHandler, err = operatorhttp.New(operatorhttp.Config{
-			AdminToken: cfg.Operator.AdminToken,
-			Session: operatorhttp.Session{
-				TenantID: cfg.Tenant.ID, TenantName: cfg.Tenant.Name,
-				Timezone: cfg.Tenant.Timezone, Currency: cfg.Tenant.Currency,
-			},
-		}, operatorStore, logger)
-		if err != nil {
-			return err
-		}
-		logger.Info("operator API enabled", "auth", "single-admin-token")
-	} else {
-		logger.Info("operator API disabled", "reason", "OPERATOR_ADMIN_TOKEN is not configured")
-	}
-	handler := buildHTTPHandler(publicRoutes, operatorHandler, limiter, cfg.HTTP.AllowedOrigin)
+	tenantPublic := tenanthttp.PublicTenant(tenantStore, cfg.Tenancy.HostSuffix, publicRoutes)
+	handler := buildStage6HTTPHandler(publicRoutes, tenantPublic, operatorHandler, onboardingHandler, webhook, limiter)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -130,7 +168,7 @@ func run() error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		logger.Info("api listening", "addr", cfg.HTTPAddr)
+		logger.Info("api listening", "addr", cfg.HTTPAddr, "tenant_host_suffix", cfg.Tenancy.HostSuffix)
 		serverErr <- server.ListenAndServe()
 	}()
 
@@ -150,12 +188,35 @@ func run() error {
 	return nil
 }
 
+// buildStage6HTTPHandler keeps identity/onboarding, widget, webhook, and
+// operator routes on separate edges. In particular, widget CORS never leaks to
+// operator or provisioning routes, and host resolution occurs before any
+// customer conversation is read.
+func buildStage6HTTPHandler(unscopedRoutes, tenantPublic, operatorHandler, onboardingHandler, webhook http.Handler, limiter *httpx.RateLimiter) http.Handler {
+	routes := http.NewServeMux()
+	edge := limiter.Middleware
+	routes.Handle("/api/v1/tenants", edge(onboardingHandler))
+	routes.Handle("/api/v1/operator/login", edge(onboardingHandler))
+	routes.Handle("/api/v1/operator/logout", edge(onboardingHandler))
+	routes.Handle("/api/v1/operator/channels", edge(onboardingHandler))
+	routes.Handle("/api/v1/operator/operators", edge(onboardingHandler))
+	routes.Handle("/api/v1/operator/catalog/", edge(onboardingHandler))
+	routes.Handle("/api/v1/operator/staff", edge(onboardingHandler))
+	routes.Handle("/api/v1/operator/staff/", edge(onboardingHandler))
+	routes.Handle("/api/v1/operator", edge(operatorHandler))
+	routes.Handle("/api/v1/operator/", edge(operatorHandler))
+	routes.Handle("POST /webhooks/v1/telegram/{tenantSlug}", edge(webhook))
+	routes.Handle("/api/v1/demo/", edge(tenantPublic))
+	routes.Handle("/widget/", edge(tenantPublic))
+	routes.Handle("/", edge(unscopedRoutes))
+	return routes
+}
+
+// buildHTTPHandler is retained for the Stage 5 route-boundary unit test. The
+// Stage 6 server uses buildStage6HTTPHandler above.
 func buildHTTPHandler(publicRoutes, operatorHandler http.Handler, limiter *httpx.RateLimiter, allowedOrigin string) http.Handler {
 	routes := http.NewServeMux()
 	if operatorHandler != nil {
-		// Operator reads are same-origin and deliberately sit outside the
-		// widget's wildcard CORS policy. Register both the exact boundary and
-		// its subtree so neither can fall through to the public branch.
 		operatorEdge := limiter.Middleware(operatorHandler)
 		routes.Handle("/api/v1/operator", operatorEdge)
 		routes.Handle("/api/v1/operator/", operatorEdge)
