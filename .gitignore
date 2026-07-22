@@ -1,6 +1,8 @@
 .env
 .DS_Store
 .kiro/
+ROADMAP.md
+ROADMAP_RU.md
 bin/
 coverage.out
 *.test
