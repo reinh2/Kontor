@@ -21,9 +21,9 @@ Four rules keep the plan honest and the stages small:
   book only after explicit confirmation, authorize every action with a
   conversation capability, respect the per-conversation token budget, and
   keep booking consistency serialized in PostgreSQL.
-- **One stage per capability boundary.** Channels, reminders, the operator
-  console, multi-tenancy, and hardening are separable concerns and ship in
-  that order, because each depends on the one before it.
+- **One stage per capability boundary.** Channels, design, reminders, the
+  operator console, multi-tenancy, and hardening are separable concerns and
+  ship in that order, because each depends on the one before it.
 
 ## Status at a glance
 
@@ -31,10 +31,11 @@ Four rules keep the plan honest and the stages small:
 | --- | --- | --- |
 | 1 | Conversation-to-booking core | **Shipped** |
 | 2 | Channels (widget, SSE, Telegram, edge protection) | **Shipped** |
-| 3 | Reminders and CRM hand-off | Next |
-| 4 | Operator console | Planned |
-| 5 | Multi-tenancy and identity | Planned |
-| 6 | Production hardening and launch | Planned |
+| 3 | Design implementation (customer widget + operator screens) | Next |
+| 4 | Reminders and CRM hand-off | Planned |
+| 5 | Operator console (live data) | Planned |
+| 6 | Multi-tenancy and identity | Planned |
+| 7 | Production hardening and launch | Planned |
 
 ---
 
@@ -86,13 +87,75 @@ Each stage below lists its **scope**, concrete **deliverables**, and the
 -race`, the PostgreSQL integration suite, and the authenticated Compose smoke
 in CI).
 
-### Stage 3 — Reminders and CRM hand-off (next)
+### Stage 3 — Design implementation (next)
+
+**Why now.** The design system is vendored (`design/design-system/`), the
+screens are authored (`design/screens/`), and the chat widget works but looks
+nothing like the designed product. Before adding more backend features, this
+stage turns the static designs into a real, browsable front-end: a polished
+customer chat widget matching the designed `Kontor Customer Chat` screen, and
+a self-contained preview of every operator screen (dashboard, trace, calendar)
+that can be opened in a browser today — initially against fixture data, wired
+to real APIs in Stage 5.
+
+**Scope.**
+- **Redesign the embeddable customer widget** (`web/widget/kontor.js`) to match
+  the `Kontor Customer Chat.dc.html` screen: apply the design-system tokens
+  (dark surface, Iris accent, Geist type, hairline borders, semantic status
+  colors), render confirmation cards with the `Card` + `KeyValue` patterns,
+  replace the current inline CSS with token-driven styles, and ensure the
+  result passes WCAG 2.1 AA contrast (the DS readme documents the adjusted
+  `--text-tertiary` that achieves 4.5:1).
+- **Build an operator front-end shell** (React, mounting the DS bundle) that
+  renders the four designed screens: Operator Dashboard, Agent Trace (with
+  linked conversation + timeline panes), Week Calendar, and Runs List. Wire
+  them against fixture/mock data first — the same scenarios documented in
+  `design/notes.md` — so the visual fidelity can be validated without backend
+  changes.
+- **Serve the operator app** from the API binary (same embedded-asset pattern
+  as the widget), gated behind a placeholder admin token until Stage 6 adds
+  real identity.
+- **Add Geist font files** (`woff2` variable builds) to `design/fonts/` so
+  both the widget and the operator app render with the intended typeface
+  instead of the system fallback.
+- **Responsive adaptation:** the operator screens stack at narrow viewports
+  (the DS notes specify a container/media query approach, desktop-first at
+  1440 px); the chat widget already adapts via its fixed-position panel.
+
+**Deliverables.**
+- `web/widget/kontor.js` rewritten with DS tokens: dark panel, accent send
+  button, confirmation cards with facts table, escalation notice, skeleton
+  loading state during turn processing. Shadow root preserved.
+- `web/operator/` (or equivalent) — a small React app that imports the DS
+  bundle and renders: dashboard (KPI cards + chart placeholders + runs table),
+  trace viewer (conversation pane + Timeline + CodeBlock payloads + linked
+  hover/scroll), week calendar (WeekCalendar + Drawer for booking detail), and
+  a runs-list DataTable with sort/filter. All against fixture data.
+- `design/fonts/geist-variable-latin.woff2` and
+  `design/fonts/geist-mono-variable-latin.woff2` (+ latin-ext variants if
+  needed).
+- Operator app served at `/operator` (or similar) from the API binary;
+  health/readiness probes still bypass auth.
+
+**Exit criteria.**
+- The chat widget visually matches the `Kontor Customer Chat` design: a
+  screenshot comparison passes review, and the widget accessibility audit
+  (contrast, ARIA roles, keyboard nav) holds.
+- Every operator screen renders its fixture scenario correctly, with all DS
+  components used as documented (Timeline states, DataTable sort, Calendar
+  day/week toggle, Drawer open/close, Toast confirmations).
+- Both apps load the Geist variable fonts; the system fallback still works
+  gracefully if fonts are removed.
+- No backend changes — the API binary, migrations, and test suite remain
+  unchanged from Stage 2.
+
+### Stage 4 — Reminders and CRM hand-off
 
 **Why now.** The product story in the README ends the booking flow with two
 hand-offs — "update the customer in the CRM and send a reminder" — that are
 not built. The worker binary is a placeholder that says so directly: it logs
 `durable reminder jobs arrive in Stage 3` and otherwise only applies
-migrations and idles. Stage 3 makes that worker real and closes the
+migrations and idles. This stage makes that worker real and closes the
 book → CRM → reminder loop.
 
 **Scope.**
@@ -128,13 +191,13 @@ book → CRM → reminder loop.
 - `go test -race` (incl. new integration tests) and the Compose smoke assert
   the enqueue-and-deliver path.
 
-### Stage 4 — Operator console
+### Stage 5 — Operator console (live data)
 
-**Why now.** Everything the operator needs already exists in the database
-(runs, traces, bookings, escalations) but there is no way to see it. The
-design system for this UI is now in the repo at
-[`design/design-system/`](design/design-system/), and the screens are already
-designed in [`design/screens/`](design/screens/).
+**Why now.** Stage 3 delivers the operator screens against fixture data;
+Stage 4 adds the backend data the operator needs (reminders, CRM, full booking
+lifecycle). This stage wires the two together: the fixture mocks are replaced
+with real API calls, so the operator sees live runs, traces, bookings, and
+escalations.
 
 **Scope.**
 - A browser application for operators: live dashboard (KPIs + status), a runs
@@ -149,7 +212,7 @@ designed in [`design/screens/`](design/screens/).
 
 **Deliverables.**
 - `internal/channels/operatorhttp` (or equivalent) read/command endpoints,
-  authorized by the Stage 5 operator identity (until then, guarded behind a
+  authorized by the Stage 6 operator identity (until then, guarded behind a
   single admin token and not exposed publicly).
 - A front-end app wired to the design system and its tokens, with the Geist
   fonts added (see the design-system note below).
@@ -161,10 +224,10 @@ designed in [`design/screens/`](design/screens/).
 - The console is accessibility-audited (the design system ships a11y
   affordances; the app must preserve them).
 
-### Stage 5 — Multi-tenancy and identity
+### Stage 6 — Multi-tenancy and identity
 
 **Why now.** The runtime is a single fixed tenant (`Salon Nord`) with no user
-identity beyond catalogue staff, and the operator console from Stage 4 needs
+identity beyond catalogue staff, and the operator console from Stage 5 needs
 real logins. This stage turns the demo into something a second business could
 use.
 
@@ -188,7 +251,7 @@ use.
   its own operators, catalogue, and channels; an operator only ever sees their
   tenant.
 
-### Stage 6 — Production hardening and launch
+### Stage 7 — Production hardening and launch
 
 **Why now.** With features complete, launch is about operability, safety, and
 scale. Many items here are called out individually in *Release readiness*
@@ -222,7 +285,7 @@ Boxes are unchecked because they are open.
 ### Security and authentication
 - [ ] **No operator authentication or authorization.** The only auth today is
   the per-conversation customer bearer capability. There is no operator login,
-  session, or role model. (Stage 5)
+  session, or role model. (Stage 6)
 - [ ] **Demo secrets by default.** `SLOT_TOKEN_SECRET` ships as
   `demo-only-change-me-…`; production needs real secrets and a real
   secrets-management story, not compose env defaults.
@@ -234,7 +297,7 @@ Boxes are unchecked because they are open.
 
 ### Multi-tenancy and identity
 - [ ] **Single fixed tenant.** No runtime tenant resolution, onboarding, or
-  per-tenant branding/config. (Stage 5)
+  per-tenant branding/config. (Stage 6)
 - [ ] **No user identity model** beyond catalogue staff rows.
 
 ### Real integrations (currently stubbed)
@@ -243,29 +306,29 @@ Boxes are unchecked because they are open.
   pinning validated against a real model.
 - [ ] **Calendar sync is a `noop`.** No external calendar (Google/Microsoft)
   read/write; double-booking protection is DB-only.
-- [ ] **CRM tools return `NOT_IMPLEMENTED`.** No HubSpot/CSV adapter. (Stage 3)
-- [ ] **No email/SMS provider** for customer reminders/notifications. (Stage 3)
-- [ ] **Reschedule and cancel return `NOT_IMPLEMENTED`.** (Stage 3)
+- [ ] **CRM tools return `NOT_IMPLEMENTED`.** No HubSpot/CSV adapter. (Stage 4)
+- [ ] **No email/SMS provider** for customer reminders/notifications. (Stage 4)
+- [ ] **Reschedule and cancel return `NOT_IMPLEMENTED`.** (Stage 4)
 
 ### Reliability and the worker
 - [ ] **The worker is a no-op.** `cmd/worker` only applies migrations and idles;
-  there is no outbox/job processing, retry loop, or dead-letter replay. (Stage 3)
+  there is no outbox/job processing, retry loop, or dead-letter replay. (Stage 4)
 - [ ] **Effectively single-instance.** The rate limiter and other state live in
   process memory; horizontal scaling needs a shared limiter and stateless SSE
-  fan-out. (Stage 6)
+  fan-out. (Stage 7)
 - [ ] **No load/soak testing** under concurrent turns beyond unit/integration
   coverage.
 
 ### Observability and operations
 - [ ] **No metrics, tracing, error tracking, dashboards, or alerting.**
-  Structured logs plus `/healthz` and `/readyz` exist; nothing else. (Stage 6)
+  Structured logs plus `/healthz` and `/readyz` exist; nothing else. (Stage 7)
 - [ ] **No operator-facing audit/alerting** on escalations or failures (the data
   is in the DB; nothing surfaces it).
 
 ### Operator experience
 - [ ] **No operator UI.** Dashboard, runs list, trace viewer, and calendar exist
-  only as static designs. The design system to build them is now imported. (Stage 4)
-- [ ] **Dashboard metrics are fixtures** — no aggregation query exists yet. (Stage 4)
+  only as static designs. The design system to build them is now imported. (Stage 3/5)
+- [ ] **Dashboard metrics are fixtures** — no aggregation query exists yet. (Stage 5)
 
 ### Data, migrations, and privacy
 - [ ] **No rollback path.** Migrations are forward-only and checksum-guarded;
@@ -273,13 +336,13 @@ Boxes are unchecked because they are open.
 - [ ] **No backup/restore runbook**, point-in-time recovery, or retention policy.
 - [ ] **PII without a lifecycle.** Customer name, email, and message content are
   stored with no retention, export, or erasure policy; no privacy notice or
-  widget consent. GDPR/CCPA obligations are unmet. (Stage 6)
+  widget consent. GDPR/CCPA obligations are unmet. (Stage 7)
 
 ### Deployment and scaling
 - [ ] **Local/demo deploy only.** Docker + Compose + nginx exist; there is no
   production deploy (hardened single-host or k8s/Helm), TLS/cert management,
   secret injection, resource limits, or a zero-downtime upgrade + migration
-  story for multiple instances. (Stage 6)
+  story for multiple instances. (Stage 7)
 
 ### Testing and QA
 - [ ] **No browser/E2E tests** for the widget, **no load tests**, and **no
@@ -297,8 +360,9 @@ Boxes are unchecked because they are open.
 ## Design system
 
 The Kontor & DocMind design system is now vendored at
-[`design/design-system/`](design/design-system/) so the Stage 4 operator
-console can be built against the same visual language as the designed screens.
+[`design/design-system/`](design/design-system/) so the Stage 3 design
+implementation can build a polished widget and operator screens against the
+same visual language as the authored designs.
 
 - `_ds_bundle.js` — the compiled React component library (global namespace
   `KontorKanonDesignSystem_452420`): `Timeline`, `DataTable`, `WeekCalendar`,
@@ -313,7 +377,7 @@ console can be built against the same visual language as the designed screens.
 - `support.js` — the `dc-runtime` that renders the `.dc.html` specimens in
   [`design/screens/`](design/screens/) by mounting them with React/ReactDOM.
 
-**Before Stage 4:** the Geist and Geist Mono variable `woff2` files are not
+**Before Stage 3:** the Geist and Geist Mono variable `woff2` files are not
 included (only `@font-face` rules with a system fallback, so nothing breaks).
 Add them to `design/fonts/` from Vercel's Geist repository for pixel-accurate
 rendering. The component sources are compiled into the bundle; if the console
