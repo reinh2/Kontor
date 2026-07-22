@@ -103,10 +103,8 @@ func (a *DemoAdapter) Complete(ctx context.Context, request Request) (Response, 
 		status := jsonStringAt(createResult, "status")
 		switch status {
 		case "success":
-			response.ID = "demo-booking-complete"
-			response.FinishReason = "stop"
-			response.Message.Content = "Your appointment is booked. I’ve sent the confirmation details."
-			return response, nil
+			return terminalResponse(response, "demo-booking-complete", "demo-call-respond-booked",
+				"Your appointment is booked. I’ve sent the confirmation details."), nil
 		case "confirmation_required":
 			confirmationID := jsonStringAt(createResult, "confirmation", "id")
 			if latestMessageRole(request.Messages) == RoleUser && isAffirmative(latestUserText(request.Messages)) {
@@ -125,15 +123,11 @@ func (a *DemoAdapter) Complete(ctx context.Context, request Request) (Response, 
 					}
 				}
 			}
-			response.ID = "demo-request-confirmation"
-			response.FinishReason = "stop"
-			response.Message.Content = "Please confirm the booking summary shown above. Nothing will be booked until you explicitly confirm."
-			return response, nil
+			return terminalResponse(response, "demo-request-confirmation", "demo-call-respond-confirm",
+				"Please confirm the booking summary shown above. Nothing will be booked until you explicitly confirm."), nil
 		case "error":
-			response.ID = "demo-booking-error"
-			response.FinishReason = "stop"
-			response.Message.Content = "I couldn’t complete that booking. Please choose another slot or ask for a human."
-			return response, nil
+			return terminalResponse(response, "demo-booking-error", "demo-call-respond-error",
+				"I couldn’t complete that booking. Please choose another slot or ask for a human."), nil
 		}
 	}
 
@@ -141,10 +135,8 @@ func (a *DemoAdapter) Complete(ctx context.Context, request Request) (Response, 
 	if hasFindResult {
 		slotToken := findFirstString(findResult, "slot_token")
 		if slotToken == "" {
-			response.ID = "demo-no-slots"
-			response.FinishReason = "stop"
-			response.Message.Content = "I couldn’t find an available demo slot."
-			return response, nil
+			return terminalResponse(response, "demo-no-slots", "demo-call-respond-no-slots",
+				"I couldn’t find an available demo slot."), nil
 		}
 		keyHash := sha256.Sum256([]byte(slotToken))
 		arguments, _ := json.Marshal(map[string]any{
@@ -183,6 +175,23 @@ func (a *DemoAdapter) Complete(ctx context.Context, request Request) (Response, 
 		{ID: "demo-call-list-staff", Name: "list_staff", Arguments: staffArguments},
 	}
 	return response, nil
+}
+
+// terminalResponse ends a demo turn through the mandatory respond_to_customer
+// control call. The runner requires this structured terminal instead of
+// unstructured assistant text, mirroring how a real provider is prompted.
+func terminalResponse(response Response, responseID, callID, message string) Response {
+	arguments, _ := json.Marshal(map[string]string{
+		"disposition": "complete",
+		"message":     message,
+	})
+	response.ID = responseID
+	response.FinishReason = "tool_calls"
+	response.Message.Content = ""
+	response.Message.ToolCalls = []ToolCall{{
+		ID: callID, Name: "respond_to_customer", Arguments: arguments,
+	}}
+	return response
 }
 
 type demoAuthorizedAction struct {

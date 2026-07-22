@@ -191,7 +191,7 @@ func TestRunnerAcceptsSoleStructuredTerminalResponseOnFinalIteration(t *testing.
 func TestRunnerRejectsUnstructuredTerminalText(t *testing.T) {
 	t.Parallel()
 	model := llm.NewFakeAdapter(llm.FakeStep{Response: llm.Response{
-		Usage: llm.Usage{TotalTokens: 10},
+		Usage:   llm.Usage{TotalTokens: 10},
 		Message: llm.Message{Role: llm.RoleAssistant, Content: "Could you clarify?"},
 	}})
 	executor := &recordingExecutor{results: map[string]ToolExecution{}}
@@ -250,7 +250,7 @@ func TestRunnerRejectsMixedTerminalBatchBeforeExecutingAnySibling(t *testing.T) 
 				calls = []llm.ToolCall{terminal, mutation}
 			}
 			model := llm.NewFakeAdapter(llm.FakeStep{Response: llm.Response{
-				Usage: llm.Usage{TotalTokens: 10},
+				Usage:   llm.Usage{TotalTokens: 10},
 				Message: llm.Message{Role: llm.RoleAssistant, ToolCalls: calls},
 			}})
 			executor := &recordingExecutor{results: map[string]ToolExecution{

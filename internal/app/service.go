@@ -71,7 +71,12 @@ type ConversationStore interface {
 	History(context.Context, string, string, int) ([]conversations.Message, error)
 }
 
-const defaultTurnAdmissionWait = 100 * time.Millisecond
+// defaultTurnAdmissionWait bounds both in-process admission and the wait for
+// the per-conversation serialization lock. It is long enough for a queued turn
+// to outlive the previous turn in the same conversation, yet strictly bounded
+// so sustained contention surfaces as a typed overload well under one second
+// instead of an unbounded queue.
+const defaultTurnAdmissionWait = 750 * time.Millisecond
 
 func New(
 	config Config,
@@ -164,6 +169,11 @@ func (s *Service) SendMessage(ctx context.Context, conversationID, text, clientM
 	if err != nil {
 		return TurnResult{}, err
 	}
+	// A conversation owned by a human never starts a new agent run: the saved
+	// message is acknowledged without any model, tool, or trace activity.
+	if conversation.Status == "escalated" {
+		return s.acknowledgeEscalated(ctx, conversation, inbound)
+	}
 	runID := ids.New()
 	startedAt := time.Now()
 	if err := s.trace.StartRun(ctx, runID, conversationID, inbound.ID, s.config.Provider, s.config.Model); err != nil {
@@ -171,9 +181,6 @@ func (s *Service) SendMessage(ctx context.Context, conversationID, text, clientM
 			ctx, conversation, inbound, runID, startedAt, llm.Usage{}, "start_run_failure",
 			"I’m sorry—I couldn’t complete that safely just now. A person will follow up.", err,
 		)
-	}
-	if conversation.Status == "escalated" {
-		return s.acknowledgeEscalated(ctx, conversation, inbound, runID, startedAt)
 	}
 	if conversations.IsHumanRequest(text) {
 		return s.escalateCustomerRequest(ctx, conversation, inbound, runID, startedAt)
@@ -298,6 +305,17 @@ func (s *Service) SendMessage(ctx context.Context, conversationID, text, clientM
 		pendingConfirmation = &proposal
 	}
 
+	// The clarification counter is server state: it advances only on the
+	// runner-validated structured disposition, never on model prose. Progress
+	// (a complete reply or a durable booking) resets it.
+	clarificationFailures := 0
+	if turn.CustomerResponseDisposition == tools.ResponseClarificationNeeded && !turn.BookingCommitted {
+		clarificationFailures = conversation.ConsecutiveClarificationFailures + 1
+		if clarificationFailures > 3 {
+			clarificationFailures = 3
+		}
+	}
+
 	var outbound conversations.Message
 	if turn.ToolRefused && !turn.HumanEscalated {
 		outbound, err = s.persistHandoff(ctx, durableHandoff{
@@ -305,8 +323,21 @@ func (s *Service) SendMessage(ctx context.Context, conversationID, text, clientM
 			Content: content, RunStatus: runStatus, Reason: "tool_refused",
 			Summary: "A tool call was refused by the server policy boundary.",
 		})
+	} else if clarificationFailures >= 3 {
+		// Third consecutive clarification outcome: the hand-off is unconditional
+		// and enforced by the server while the reply is persisted, matching the
+		// database constraint on consecutive_clarification_failures.
+		content = "I still couldn’t understand the request after several attempts, so I’ve handed this conversation to a person. Your messages are saved for them."
+		runStatus = "escalated"
+		outcome = "escalated"
+		outbound, err = s.persistHandoff(ctx, durableHandoff{
+			Conversation: conversation, Inbound: inbound, RunID: runID, StartedAt: startedAt,
+			Content: content, RunStatus: runStatus, Reason: "understanding_failed",
+			Summary:               "Three consecutive clarification outcomes did not establish the request.",
+			ClarificationFailures: 3,
+		})
 	} else {
-		outbound, err = s.persistReplyAndFinish(ctx, conversation, runID, startedAt, content, runStatus)
+		outbound, err = s.persistReplyAndFinish(ctx, conversation, runID, startedAt, content, runStatus, clarificationFailures)
 	}
 	if err != nil {
 		return s.handleSavedTurnFailure(
@@ -348,15 +379,12 @@ func (s *Service) handleAgentFailure(
 	usage llm.Usage,
 	runErr error,
 ) (TurnResult, error) {
-	status := "failed"
 	reason := "provider_failure"
 	fallback := "I’m sorry—I couldn’t complete that safely just now. A person will follow up."
 	if errors.Is(runErr, agent.ErrTokenBudgetExceeded) {
-		status = "budget_exhausted"
 		reason = "token_budget_exhausted"
 		fallback = "This conversation reached its safety budget, so I’ve handed it to a person."
 	} else if errors.Is(runErr, agent.ErrIterationLimit) {
-		status = "escalated"
 		reason = "iteration_limit"
 		fallback = "I couldn’t complete this within the safe action limit, so I’ve handed it to a person."
 	} else if errors.Is(runErr, agent.ErrTurnTimeout) || errors.Is(runErr, context.DeadlineExceeded) {
@@ -365,23 +393,28 @@ func (s *Service) handleAgentFailure(
 	return s.handleSavedTurnFailure(ctx, conversation, inbound, runID, startedAt, usage, reason, fallback, runErr)
 }
 
+// acknowledgeEscalated stores a fixed acknowledgement for a conversation a
+// human already owns. It deliberately creates no agent run, so post-handoff
+// messages leave no automation trace and cannot re-trigger the model.
 func (s *Service) acknowledgeEscalated(
 	ctx context.Context,
 	conversation conversations.Conversation,
 	inbound conversations.Message,
-	runID string,
-	startedAt time.Time,
 ) (TurnResult, error) {
 	content := "Your message is saved for the person handling this conversation. The automated agent will not take further actions."
-	outbound, err := s.persistReplyAndFinish(ctx, conversation, runID, startedAt, content, "escalated")
+	cleanupContext, cancel := boundedCleanupContext(ctx)
+	defer cancel()
+	outbound, err := insertAssistantReply(
+		cleanupContext, s.pool, s.config.TenantID, conversation.ID, inbound.ID, "agent-ack:", content,
+	)
 	if err != nil {
-		return s.handleSavedTurnFailure(
-			ctx, conversation, inbound, runID, startedAt, llm.Usage{}, "persist_acknowledgement_failure",
-			"Your message is saved for the person handling this conversation. The automated agent will not take further actions.", err,
-		)
+		// The inbound message is already durable and the conversation is already
+		// with a person; surface the acknowledgement failure honestly instead of
+		// fabricating an agent run for a turn that must not run automation.
+		return TurnResult{}, fmt.Errorf("persist escalated acknowledgement: %w", err)
 	}
 	return TurnResult{
-		RunID: runID, ConversationID: conversation.ID, MessageID: outbound.ID,
+		ConversationID: conversation.ID, MessageID: outbound.ID,
 		Message: content, Outcome: "escalated",
 	}, nil
 }
@@ -472,6 +505,10 @@ type durableHandoff struct {
 	Reason       string
 	Summary      string
 	DeadLetter   bool
+	// ClarificationFailures, when positive, records the final counter value in
+	// the same transaction that escalates the conversation. The database allows
+	// three only for an escalated conversation.
+	ClarificationFailures int
 }
 
 func (s *Service) handleSavedTurnFailure(
@@ -512,6 +549,7 @@ func (s *Service) persistReplyAndFinish(
 	runID string,
 	startedAt time.Time,
 	content, runStatus string,
+	clarificationFailures int,
 ) (conversations.Message, error) {
 	cleanupContext, cancel := boundedCleanupContext(ctx)
 	defer cancel()
@@ -526,6 +564,12 @@ func (s *Service) persistReplyAndFinish(
 	)
 	if err != nil {
 		return conversations.Message{}, err
+	}
+	if _, err := tx.Exec(cleanupContext, `
+		UPDATE conversations SET consecutive_clarification_failures=$3,updated_at=now()
+		WHERE tenant_id=$1 AND id=$2`,
+		s.config.TenantID, conversation.ID, clarificationFailures); err != nil {
+		return conversations.Message{}, fmt.Errorf("persist clarification state: %w", err)
 	}
 	tag, err := tx.Exec(cleanupContext, `
 		UPDATE agent_runs
@@ -625,9 +669,15 @@ func (s *Service) persistHandoff(ctx context.Context, record durableHandoff) (co
 		}
 	}
 	tag, err := tx.Exec(cleanupContext, `
-		UPDATE conversations SET status='escalated',updated_at=now()
+		UPDATE conversations
+		SET status='escalated',
+		    consecutive_clarification_failures=CASE
+		        WHEN $4::smallint > 0 THEN $4::smallint
+		        ELSE consecutive_clarification_failures END,
+		    updated_at=now()
 		WHERE tenant_id=$1 AND id=$2 AND customer_id=$3`,
-		s.config.TenantID, record.Conversation.ID, record.Conversation.CustomerID)
+		s.config.TenantID, record.Conversation.ID, record.Conversation.CustomerID,
+		record.ClarificationFailures)
 	if err != nil {
 		return conversations.Message{}, fmt.Errorf("mark conversation escalated: %w", err)
 	}

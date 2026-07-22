@@ -47,6 +47,7 @@ The images are static exports from [`design/screens`](design/screens); the repos
 - Persists customers, conversations, messages, agent runs, model iterations, parent tool calls, one-based child retry attempts, bookings, booking events, escalations, and dead-letter events in PostgreSQL.
 - Exposes a small JSON demo API. Conversation creation returns an opaque, conversation-scoped bearer capability once; sending messages and reading traces require it, and only its SHA-256 digest is stored.
 - Enforces a persisted 50,000-token hard cap per conversation by atomically reserving a conservative allowance—including the provider's worst-case retry count—before every model request and settling aggregate usage afterward.
+- Requires every customer-facing reply to arrive through a structured `respond_to_customer` terminal call, so a reply's disposition is data the server acts on: a persisted per-conversation counter forces a human hand-off after three consecutive clarification outcomes, and an escalated conversation acknowledges later messages without starting any agent run.
 - Executes `escalate_to_human` as a durable hand-off. Provider and bounded-loop failures return a safe customer message, create an escalation, and retain a dead-letter event for inspection or replay.
 - Bounds each turn to 8 model iterations and 25 seconds by default. Retryable tool failures get at most 3 attempts, each with a 5-second timeout and capped exponential backoff; OpenRouter requests separately get at most 3 attempts within one provider deadline.
 
@@ -105,7 +106,7 @@ Kontor is a demonstration project, not a production booking service.
 - `list_services`, `list_staff`, `find_slots`, `create_booking`, and `escalate_to_human` execute. Rescheduling, cancellation, and CRM contact/deal contracts remain allowlisted but return `NOT_IMPLEMENTED` for later stages.
 - There is no HubSpot or CSV CRM adapter in this codebase yet, and no outbound email, SMS, or reminder sender. A customer row is stored in Kontor’s own database only.
 - Calendar synchronization is currently a `noop`; PostgreSQL is the appointment source of truth for the demo.
-- Explicit requests for a person and server-side tool refusals are enforced hand-offs. The instruction to escalate after three failed attempts to understand a request is currently a model policy, not an independently persisted server counter.
+- Explicit requests for a person, server-side tool refusals, and three consecutive structured clarification outcomes are all enforced hand-offs backed by persisted server state; the model cannot avoid the third-clarification hand-off except by actually resolving the request.
 - The `2.9 s` dashboard median is illustrative fixture data. The backend records individual run durations but does not yet aggregate operational metrics.
 - The default secret and database credentials are demo values and must not be used outside a local environment.
 

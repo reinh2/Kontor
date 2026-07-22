@@ -65,8 +65,16 @@ func TestDemoAdapterDrivesDeterministicBookingAndMultiToolDiscovery(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requestConfirmation.FinishReason != "stop" || requestConfirmation.Message.Content == "" {
+	if requestConfirmation.FinishReason != "tool_calls" || len(requestConfirmation.Message.ToolCalls) != 1 ||
+		requestConfirmation.Message.ToolCalls[0].Name != "respond_to_customer" {
 		t.Fatalf("confirmation response = %#v", requestConfirmation)
+	}
+	var confirmationTerminal map[string]string
+	if err := json.Unmarshal(requestConfirmation.Message.ToolCalls[0].Arguments, &confirmationTerminal); err != nil {
+		t.Fatal(err)
+	}
+	if confirmationTerminal["disposition"] != "complete" || confirmationTerminal["message"] == "" {
+		t.Fatalf("confirmation terminal arguments = %#v", confirmationTerminal)
 	}
 	messages = append(messages, requestConfirmation.Message, Message{Role: RoleUser, Content: "Yes, confirm"})
 	confirmed, err := adapter.Complete(context.Background(), Request{Messages: messages})
@@ -82,6 +90,26 @@ func TestDemoAdapterDrivesDeterministicBookingAndMultiToolDiscovery(t *testing.T
 	}
 	if original["idempotency_key"] != confirmedObject["idempotency_key"] || confirmedObject["confirmation_id"] == "" {
 		t.Fatalf("confirmed arguments = %#v, original = %#v", confirmedObject, original)
+	}
+
+	messages = append(messages, confirmed.Message, Message{
+		Role: RoleTool, Name: "create_booking", ToolCallID: confirmed.Message.ToolCalls[0].ID,
+		Content: `{"status":"success","data":{"booking":{"id":"40000000-0000-4000-8000-000000000001"}}}`,
+	})
+	booked, err := adapter.Complete(context.Background(), Request{Messages: messages})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if booked.FinishReason != "tool_calls" || len(booked.Message.ToolCalls) != 1 ||
+		booked.Message.ToolCalls[0].Name != "respond_to_customer" {
+		t.Fatalf("booked terminal response = %#v", booked)
+	}
+	var bookedTerminal map[string]string
+	if err := json.Unmarshal(booked.Message.ToolCalls[0].Arguments, &bookedTerminal); err != nil {
+		t.Fatal(err)
+	}
+	if bookedTerminal["disposition"] != "complete" || bookedTerminal["message"] == "" {
+		t.Fatalf("booked terminal arguments = %#v", bookedTerminal)
 	}
 }
 

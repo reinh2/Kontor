@@ -333,9 +333,12 @@ func (a *ignoreAuthorizedOnceAdapter) Complete(ctx context.Context, request llm.
 		if last.Role == llm.RoleSystem && strings.HasPrefix(last.Content, llm.AuthorizedActionPrefix) {
 			a.ignored = true
 			return llm.Response{
-				Model: "fake/ignore-once", FinishReason: "stop",
-				Usage:   llm.Usage{TotalTokens: 10},
-				Message: llm.Message{Role: llm.RoleAssistant, Content: "Please confirm once more."},
+				Model: "fake/ignore-once", FinishReason: "tool_calls",
+				Usage: llm.Usage{TotalTokens: 10},
+				Message: llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+					ID: "ignore-once-respond", Name: tools.ToolRespondToCustomer,
+					Arguments: []byte(`{"disposition":"complete","message":"Please confirm once more."}`),
+				}}},
 			}, nil
 		}
 	}
@@ -499,16 +502,19 @@ func TestStage1ThirdClarificationSignalsUnderstandingEscalation(t *testing.T) {
 		t.Fatal(err)
 	}
 	executor := agenttools.NewExecutor(pool, gateway, cfg.Tenant.ID, 3, 2*time.Second)
+	clarificationStep := func(callID, message string) llm.FakeStep {
+		return llm.FakeStep{Response: llm.Response{
+			Model: "fake/clarify", FinishReason: "tool_calls", Usage: llm.Usage{TotalTokens: 10},
+			Message: llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+				ID: callID, Name: tools.ToolRespondToCustomer,
+				Arguments: []byte(`{"disposition":"clarification_needed","message":"` + message + `"}`),
+			}}},
+		}}
+	}
 	model := llm.NewFakeAdapter(
-		llm.FakeStep{Response: llm.Response{Model: "fake/clarify", Usage: llm.Usage{TotalTokens: 10}, Message: llm.Message{Role: llm.RoleAssistant, Content: "Could you clarify?"}}},
-		llm.FakeStep{Response: llm.Response{Model: "fake/clarify", Usage: llm.Usage{TotalTokens: 10}, Message: llm.Message{Role: llm.RoleAssistant, Content: "Which service did you mean?"}}},
-		llm.FakeStep{Response: llm.Response{Model: "fake/clarify", Usage: llm.Usage{TotalTokens: 10}, Message: llm.Message{
-			Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
-				ID: "understanding-escalation", Name: tools.ToolEscalate,
-				Arguments: []byte(`{"reason":{"code":"understanding_failed","summary":"Three clarification attempts did not establish the request."}}`),
-			}},
-		}}},
-		llm.FakeStep{Response: llm.Response{Model: "fake/clarify", Usage: llm.Usage{TotalTokens: 10}, Message: llm.Message{Role: llm.RoleAssistant, Content: "A person will follow up."}}},
+		clarificationStep("clarify-1", "Could you clarify?"),
+		clarificationStep("clarify-2", "Which service did you mean?"),
+		clarificationStep("clarify-3", "I still do not understand the request."),
 		llm.FakeStep{Response: llm.Response{Model: "fake/clarify", Usage: llm.Usage{TotalTokens: 10}, Message: llm.Message{Role: llm.RoleAssistant, Content: "This must not run."}}},
 	)
 	runner, err := agent.NewRunner(agent.Config{
@@ -897,8 +903,11 @@ func TestStage1CommittedBookingOverridesMisleadingModelCopy(t *testing.T) {
 			}}},
 		}},
 		llm.FakeStep{Response: llm.Response{
-			Model: "fake/committed-copy", FinishReason: "stop", Usage: llm.Usage{TotalTokens: 10},
-			Message: llm.Message{Role: llm.RoleAssistant, Content: "The booking was not made."},
+			Model: "fake/committed-copy", FinishReason: "tool_calls", Usage: llm.Usage{TotalTokens: 10},
+			Message: llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+				ID: "committed-copy-respond", Name: tools.ToolRespondToCustomer,
+				Arguments: []byte(`{"disposition":"complete","message":"The booking was not made."}`),
+			}}},
 		}},
 	)
 	application := newCommittedBookingTestApplication(t, pool, cfg, model)
@@ -1037,6 +1046,14 @@ func assertMultiCallAndNestedAttempts(t *testing.T, traced []agenttrace.ToolTrac
 	firstIteration := make(map[int]agenttrace.ToolTrace)
 	confirmationRequired := false
 	for _, tool := range traced {
+		if tool.Name == tools.ToolRespondToCustomer {
+			// The runner-local terminal control call never reaches the executor,
+			// so it records no nested attempts by design.
+			if len(tool.Attempts) != 0 {
+				t.Fatalf("terminal control call recorded attempts: %#v", tool.Attempts)
+			}
+			continue
+		}
 		if len(tool.Attempts) != 1 || tool.Attempts[0].AttemptNo != 1 {
 			t.Fatalf("tool %s does not expose one nested attempt numbered 1: %#v", tool.Name, tool.Attempts)
 		}

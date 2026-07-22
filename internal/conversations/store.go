@@ -41,6 +41,9 @@ type Conversation struct {
 	TokenBudget    int
 	TokensUsed     int
 	TokensReserved int
+	// ConsecutiveClarificationFailures is the server-owned count of structured
+	// clarification outcomes; the third consecutive one forces a hand-off.
+	ConsecutiveClarificationFailures int
 	// CapabilityToken is returned only by CreateDemo. The database stores its
 	// SHA-256 digest and Get deliberately never hydrates this field.
 	CapabilityToken string `json:"-"`
@@ -156,10 +159,12 @@ func newCapabilityToken() (raw, digest string, err error) {
 func (s *Store) Get(ctx context.Context, tenantID, conversationID string) (Conversation, error) {
 	var item Conversation
 	err := s.pool.QueryRow(ctx, `
-		SELECT tenant_id,id,customer_id,channel,status,token_budget,tokens_used,tokens_reserved
+		SELECT tenant_id,id,customer_id,channel,status,token_budget,tokens_used,tokens_reserved,
+		       consecutive_clarification_failures
 		FROM conversations WHERE tenant_id=$1 AND id=$2`, tenantID, conversationID,
 	).Scan(&item.TenantID, &item.ID, &item.CustomerID, &item.Channel, &item.Status,
-		&item.TokenBudget, &item.TokensUsed, &item.TokensReserved)
+		&item.TokenBudget, &item.TokensUsed, &item.TokensReserved,
+		&item.ConsecutiveClarificationFailures)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Conversation{}, ErrNotFound
 	}

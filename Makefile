@@ -14,7 +14,7 @@ test-race:
 
 test-integration:
 	@test -n "$$TEST_DATABASE_URL" || (echo "TEST_DATABASE_URL is required"; exit 1)
-	go test -race -tags=integration ./...
+	go test -race -count=1 ./...
 
 up:
 	docker compose up --build

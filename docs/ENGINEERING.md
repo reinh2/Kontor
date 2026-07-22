@@ -15,7 +15,7 @@ The implemented path is:
 7. Recheck the slot under a database lock and create the booking and its first event atomically.
 8. Persist the assistant reply and close the agent run, execute a requested `escalate_to_human` hand-off, or write a safe fallback plus escalation and dead-letter event for provider or bounded-loop failures.
 
-The tool contract also names rescheduling, cancellation, and CRM contact/deal operations. The gateway deliberately returns `NOT_IMPLEMENTED` for those calls in Stage 1; `escalate_to_human` is implemented and durably marks the conversation for human follow-up. There are no CRM, notification, external-calendar, Telegram, or browser-client adapters in this repository.
+The tool contract also names rescheduling, cancellation, and CRM contact/deal operations. The gateway deliberately returns `NOT_IMPLEMENTED` for those calls in Stage 1; `escalate_to_human` is implemented and durably marks the conversation for human follow-up. The contract additionally includes `respond_to_customer`, a runner-local terminal control call: every customer-facing reply must arrive through it, so the reply's disposition (`complete` or `clarification_needed`) is structured data the server can act on rather than prose. There are no CRM, notification, external-calendar, Telegram, or browser-client adapters in this repository.
 
 ## Stage scope decision
 
@@ -53,7 +53,7 @@ The Stage 1 forward migration is limited to data used now that also carries into
 5. Records the model iteration.
 6. Validates the returned assistant role and normalizes missing tool-call IDs.
 7. Handles every returned tool call sequentially in response order, appending every result before the next model request. A refusal or successful human hand-off terminates execution of that batch; later siblings receive persisted `SKIPPED_AFTER_HANDOFF` results and cannot mutate state.
-8. Stops when the assistant returns no tool calls, or when an iteration, time, or token limit is reached.
+8. Ends the turn only through the mandatory `respond_to_customer` terminal call, or when an iteration, time, or token limit is reached. The terminal call must be the only call in its response and carry no separate assistant text; unstructured terminal text or a mixed batch is a protocol violation that fails the turn instead of reaching the customer.
 
 One model response may contain multiple tool calls. The runner handles that case explicitly: it processes every call sequentially in the order returned, persists its result, appends all results to history, and only then makes the next model request. Sequential execution is intentional even though OpenRouter is told that parallel tool calls are permitted; it produces deterministic traces and prevents sibling writes from racing through the same turn. A refused tool or successful `escalate_to_human` is terminal: remaining siblings are traced as refused with zero attempts and are not dispatched.
 
@@ -66,6 +66,12 @@ The gateway compiles the tool schemas at startup and rejects unknown tools, malf
 Model arguments never carry trusted ownership or customer profile data. `agenttools.Executor` joins the run, conversation, and customer to construct `tools.TrustedContext`; the gateway then uses that persisted identity for capability checks, confirmation facts, and booking commands, overriding any model-authored customer object. Slot tokens are HMAC-signed and bind tenant, conversation, service, staff, start/end time, timezone, and expiration.
 
 `escalate_to_human` passes through the same schema and capability boundary. Its backend creates an idempotent escalation associated with the run and source tool call and marks the conversation escalated. The runner treats that successful hand-off as terminal, skips later sibling calls, and closes the run with an escalated outcome.
+
+### Structured replies and the clarification counter
+
+`respond_to_customer` is validated inside the runner and never reaches the executor or gateway. Its validated disposition drives a server-owned counter on the conversation row: a `complete` reply or a durable booking resets `consecutive_clarification_failures` to zero, while each `clarification_needed` reply increments it in the same transaction that persists the reply. The third consecutive clarification outcome is an unconditional hand-off: the server replaces the model's question with a fixed hand-off message, records an `understanding_failed` escalation, and marks the conversation escalated — a database constraint only permits the counter to reach three on an escalated conversation. The model cannot influence the count except through the structured disposition itself.
+
+Once a conversation is escalated, later inbound messages are saved and acknowledged with a fixed reply but create no agent run at all: no model call, no tool access, and no trace rows. Only the pre-hand-off runs appear in the conversation's automation history.
 
 ### Two-phase confirmation
 
@@ -96,7 +102,7 @@ agent_run
         └── tool_execution_attempt (1..N)
 ```
 
-Run rows capture status, provider, model, token totals, duration, and a sanitized failure. There is exactly one `tool_executions` parent row per model-emitted call. Each execution attempt is a child `tool_execution_attempts` row whose `attempt_no` starts at 1 and increases under that same parent, so a retry does not become a second sibling call. `GET /api/v1/demo/runs/{runID}` returns this nested shape, matching the expandable attempt treatment in `design/screens/Kontor Agent Trace.dc.html`. There is no dashboard aggregation query yet.
+Run rows capture status, provider, model, token totals, duration, and a sanitized failure. There is exactly one `tool_executions` parent row per model-emitted call. Each execution attempt is a child `tool_execution_attempts` row whose `attempt_no` starts at 1 and increases under that same parent, so a retry does not become a second sibling call. The runner-local `respond_to_customer` control call is traced as a parent with zero attempts, because it never invokes the executor. `GET /api/v1/demo/runs/{runID}` returns this nested shape, matching the expandable attempt treatment in `design/screens/Kontor Agent Trace.dc.html`. There is no dashboard aggregation query yet.
 
 Inbound messages are saved before the agent starts. If the provider or bounded loop fails afterward, the service persists a safe assistant fallback, an escalation, the failed run status, and a pending `dead_letter_events` row with sanitized context for later inspection or replay. A policy-refused tool also creates a durable escalation; it does not disappear as a model-only message.
 
@@ -111,6 +117,8 @@ Inbound messages are saved before the agent starts. If the provider or bounded l
 | OpenRouter attempts | 3 | Maximum requests for transient transport and 408/429/500/502/503/504 failures, including embedded provider errors returned inside HTTP 200 |
 | OpenRouter deadline | turn remainder (25 s maximum by default) | One deadline shared by the initial request, retry waits, and retries |
 | Conversation token budget | 50,000 | Persistent hard cap, including concurrent reservations |
+| Consecutive clarifications | 3 | Server-forced `understanding_failed` hand-off on the third structured clarification outcome |
+| Turn queue wait | 750 ms | Bound on in-process admission plus the per-conversation serialization wait before a typed overload |
 | Maximum model output | 800 tokens | Per-completion allowance |
 | OpenRouter response body | 4 MiB | Read limit before decoding |
 | Minimum booking lead | 15 min | Enforced during search, token issue/consume, and booking |
