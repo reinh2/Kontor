@@ -33,7 +33,7 @@ The wider business flow continues by updating the customer in the CRM and sendin
   </tr>
 </table>
 
-The images are static exports from [`design/screens`](design/screens); the repository does not yet contain the browser application that makes them interactive.
+The images are static exports from [`design/screens`](design/screens). Stage 2 ships a working customer chat widget; the operator dashboard, trace viewer, and calendar shown here remain static designs without a browser application behind them.
 
 ## What it does
 
@@ -50,6 +50,10 @@ The images are static exports from [`design/screens`](design/screens); the repos
 - Requires every customer-facing reply to arrive through a structured `respond_to_customer` terminal call, so a reply's disposition is data the server acts on: a persisted per-conversation counter forces a human hand-off after three consecutive clarification outcomes, and an escalated conversation acknowledges later messages without starting any agent run.
 - Executes `escalate_to_human` as a durable hand-off. Provider and bounded-loop failures return a safe customer message, create an escalation, and retain a dead-letter event for inspection or replay.
 - Bounds each turn to 8 model iterations and 25 seconds by default. Retryable tool failures get at most 3 attempts, each with a 5-second timeout and capped exponential backoff; OpenRouter requests separately get at most 3 attempts within one provider deadline.
+- Serves an embeddable chat widget as one `<script>` tag straight from the API binary. It renders inside a closed shadow root so host-page styles cannot leak in, holds the conversation capability in `sessionStorage`, streams replies over SSE, and shows the same confirm-before-book card the JSON API returns.
+- Streams every committed turn over a durable per-conversation SSE channel. Each event is written in the same transaction as the reply it describes and carries a monotonic id, so a reconnecting client resumes from `Last-Event-ID` without gaps or duplicates and never observes an outcome that later disappears.
+- Accepts Telegram Bot API webhooks behind a constant-time secret check, binds each private chat to one conversation, and deduplicates redelivered updates through a persisted `update_id` so a retry acknowledges without running a second agent turn. Outbound replies retry transient Bot API failures with bounded backoff.
+- Protects the turn-admission queue with a per-client-IP token-bucket rate limiter (60 requests per minute, burst 20 by default) and a configurable CORS policy for the widget origin; liveness and readiness probes bypass the limiter.
 
 ## Quick start
 
@@ -61,7 +65,9 @@ cd kontor
 docker compose up --build
 ```
 
-The service listens on `http://localhost:8080`; [the health endpoint](http://localhost:8080/healthz) returns JSON when startup is complete. Its Stage 1 endpoints are under `/api/v1/demo`, and `/readyz` exposes database readiness. `POST /api/v1/demo/conversations` returns a `capability_token` only in its creation response. Pass it as `Authorization: Bearer <capability_token>` when sending messages or reading that conversation's run traces.
+The service listens on `http://localhost:8080`; [the health endpoint](http://localhost:8080/healthz) returns JSON when startup is complete. The conversation endpoints are under `/api/v1/demo`, and `/readyz` exposes database readiness. `POST /api/v1/demo/conversations` returns a `capability_token` only in its creation response. Pass it as `Authorization: Bearer <capability_token>` when sending messages, streaming that conversation's events, or reading its run traces.
+
+Open [the widget demo page](http://localhost:8080/widget/v1/demo) to try the embeddable chat in a browser; it loads the same `/widget/v1/kontor.js` you would drop into a host site with one `<script>` tag. Connected widgets receive each committed turn over `GET /api/v1/demo/conversations/{id}/events`. To enable the Telegram channel, set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` and register the bot's webhook at `/webhooks/v1/telegram`; without both, the channel stays disabled and the route is not mounted.
 
 To exercise real tool-calling behavior, copy [`.env.example`](.env.example), set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and `OPENROUTER_MODEL`, then restart Compose. This switches the same bounded agent loop and server-side tool gateway from the deterministic adapter to OpenRouter; it does not bypass confirmation, capabilities, budgets, or scheduling checks.
 
@@ -69,8 +75,10 @@ To exercise real tool-calling behavior, copy [`.env.example`](.env.example), set
 
 ```mermaid
 flowchart LR
-    Customer["Demo API client"] --> HTTP["HTTP channel"]
-    HTTP --> App["Conversation service"]
+    Widget["Embeddable widget"] --> Edge
+    Telegram["Telegram webhook"] --> Edge
+    Client["Demo API client"] --> Edge
+    Edge["HTTP edge<br/>CORS + rate limit"] --> App["Conversation service"]
     App --> Runner["Bounded agent runner"]
     Runner <--> Model["Deterministic demo<br/>or OpenRouter"]
     Runner --> Executor["Retrying tool executor"]
@@ -78,6 +86,9 @@ flowchart LR
     Gateway --> Schedule["Scheduling engine<br/>and repository"]
     Schedule --> DB[(PostgreSQL)]
     App --> DB
+    App --> Events["Durable turn events"]
+    Events --> DB
+    Events -. SSE replay .-> Widget
     Runner --> Trace["Trace and token budget"]
     Trace --> DB
     Exports["Static UX exports"] -. visualize the intended operator experience .-> Trace
@@ -88,7 +99,7 @@ The model can request actions, but it never owns identity, authorization, or the
 ## Design decisions
 
 - **Scope one tenant without erasing tenancy.** Every business key retains `tenant_id`, but this build resolves one fixed tenant from configuration and intentionally has no tenant onboarding or tenant-management UI.
-- **Keep the first schema small.** The Stage 1 migration contains only data needed now that also carries into planned Stages 2–3. Channel delivery, reminder/outbox, CRM, identity, billing, and operator-UI tables arrive with the stage that uses them instead of being pre-created.
+- **Grow the schema one stage at a time.** The Stage 1 migration contained only data needed then that also carried forward. Channel delivery arrived with Stage 2 as a durable turn-event stream and a Telegram update-dedupe table; reminder/outbox, CRM, identity, billing, and operator-UI tables still arrive with the stage that uses them instead of being pre-created.
 - **Propose, then act.** A mutating tool first returns an exact summary. A later, unambiguous customer message authorizes only those frozen arguments.
 - **Keep authority outside the prompt.** Tenant, customer profile, conversation, inbound-message identity, and capabilities are resolved from persisted server state rather than model-authored JSON; model-supplied customer details are never used for a booking.
 - **Make the database the final arbiter.** Signed slot tokens improve the hand-off, but the booking transaction still locks and rechecks the schedule before inserting.
@@ -102,7 +113,7 @@ The model can request actions, but it never owns identity, authorization, or the
 Kontor is a demonstration project, not a production booking service.
 
 - It runs as one fixed demo tenant (`Salon Nord`); there is no user identity system, tenant onboarding, or tenant-management UI. The demo API does enforce a generated bearer capability on each conversation after creation, but that is not a full authentication or account system.
-- The HTTP surface is a JSON demo API. The web widget, Telegram channel, streaming updates, operator dashboard, trace viewer, and calendar shown above are designs, not wired application screens.
+- The HTTP surface is a JSON demo API with an embeddable chat widget, durable SSE streaming, and a Telegram webhook channel wired in Stage 2. The operator dashboard, trace viewer, and calendar shown above remain static designs, not wired application screens.
 - `list_services`, `list_staff`, `find_slots`, `create_booking`, and `escalate_to_human` execute. Rescheduling, cancellation, and CRM contact/deal contracts remain allowlisted but return `NOT_IMPLEMENTED` for later stages.
 - There is no HubSpot or CSV CRM adapter in this codebase yet, and no outbound email, SMS, or reminder sender. A customer row is stored in Kontor’s own database only.
 - Calendar synchronization is currently a `noop`; PostgreSQL is the appointment source of truth for the demo.

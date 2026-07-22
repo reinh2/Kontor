@@ -14,9 +14,11 @@ import (
 	"github.com/reinhlord/kontor/db/migrations"
 	"github.com/reinhlord/kontor/internal/bootstrap"
 	"github.com/reinhlord/kontor/internal/channels/demohttp"
+	"github.com/reinhlord/kontor/internal/channels/telegram"
 	"github.com/reinhlord/kontor/internal/demo"
 	"github.com/reinhlord/kontor/internal/platform/config"
 	"github.com/reinhlord/kontor/internal/platform/database"
+	"github.com/reinhlord/kontor/internal/platform/httpx"
 	"github.com/reinhlord/kontor/internal/platform/logging"
 )
 
@@ -67,13 +69,38 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	root := http.NewServeMux()
+	root.Handle("/", demohttp.New(components.Application, components.Trace, pool, logger))
+	if cfg.Telegram.Enabled() {
+		sender, err := telegram.NewBotAPISender(telegram.BotAPIConfig{
+			Token: cfg.Telegram.BotToken, BaseURL: cfg.Telegram.APIBaseURL,
+		})
+		if err != nil {
+			return err
+		}
+		webhook, err := telegram.NewWebhook(telegram.Config{
+			TenantID:      cfg.Tenant.ID,
+			WebhookSecret: cfg.Telegram.WebhookSecret,
+			TokenBudget:   int(cfg.Agent.ConversationTokenBudget),
+		}, pool, components.Application, components.Conversations, sender, logger)
+		if err != nil {
+			return err
+		}
+		root.Handle("POST /webhooks/v1/telegram", webhook)
+		logger.Info("telegram webhook channel enabled")
+	}
+	limiter := httpx.NewRateLimiter(cfg.HTTP.RateLimitPerMinute, cfg.HTTP.RateLimitBurst)
+	handler := httpx.CORS(cfg.HTTP.AllowedOrigin, limiter.Middleware(root))
+
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           demohttp.New(components.Application, components.Trace, pool, logger),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      cfg.Agent.TurnTimeout + 10*time.Second,
-		IdleTimeout:       60 * time.Second,
+		// SSE streams outlive any static write timeout; the stream handler
+		// enforces its own per-write deadlines through ResponseController.
+		WriteTimeout: 0,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	serverErr := make(chan error, 1)

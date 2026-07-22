@@ -43,3 +43,30 @@ func TestLoadRejectsShutdownShorterThanTurnDrainWindow(t *testing.T) {
 		t.Fatal("expected an unsafe shutdown timeout to fail")
 	}
 }
+
+func TestLoadDefaultsPermissiveCORSAndBoundedRateLimit(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HTTP.AllowedOrigin != "*" {
+		t.Fatalf("allowed origin = %q, want wildcard demo default", cfg.HTTP.AllowedOrigin)
+	}
+	if cfg.HTTP.RateLimitPerMinute < 1 || cfg.HTTP.RateLimitBurst < 1 {
+		t.Fatalf("rate limit = %+v, want positive defaults", cfg.HTTP)
+	}
+}
+
+func TestLoadRejectsNonPositiveRateLimit(t *testing.T) {
+	t.Setenv("HTTP_RATE_LIMIT_PER_MINUTE", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected a non-positive rate limit to fail")
+	}
+}
+
+func TestLoadRejectsEmptyAllowedOrigin(t *testing.T) {
+	t.Setenv("HTTP_ALLOWED_ORIGIN", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected an explicitly empty allowed origin to fail")
+	}
+}

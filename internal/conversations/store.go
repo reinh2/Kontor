@@ -110,6 +110,90 @@ func (s *Store) CreateDemo(ctx context.Context, tenantID string, profile Profile
 	return conversation, nil
 }
 
+// EnsureChannelConversation returns the open conversation bound to one
+// external channel identity (for Telegram, the chat id), creating the
+// customer and conversation on first contact. Concurrent first messages for
+// the same identity resolve to a single conversation through the unique
+// (tenant, channel, channel_ref) index.
+func (s *Store) EnsureChannelConversation(
+	ctx context.Context,
+	tenantID, channel, channelRef string,
+	profile Profile,
+	tokenBudget int,
+) (Conversation, error) {
+	if tenantID == "" || channel == "" || channelRef == "" || tokenBudget < 1 {
+		return Conversation{}, errors.New("invalid channel conversation input")
+	}
+	if strings.TrimSpace(profile.DisplayName) == "" {
+		return Conversation{}, errors.New("display name is required")
+	}
+	if profile.Email == "" && profile.Phone == "" {
+		return Conversation{}, errors.New("email or phone is required")
+	}
+
+	existing, err := s.channelConversation(ctx, tenantID, channel, channelRef)
+	if err == nil {
+		return existing, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return Conversation{}, err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Conversation{}, fmt.Errorf("begin channel conversation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	customerID := ids.New()
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO customers(tenant_id,id,display_name,email,phone)
+		VALUES($1,$2,$3,NULLIF($4,''),NULLIF($5,''))`,
+		tenantID, customerID, strings.TrimSpace(profile.DisplayName),
+		strings.TrimSpace(profile.Email), strings.TrimSpace(profile.Phone),
+	); err != nil {
+		return Conversation{}, fmt.Errorf("insert channel customer: %w", err)
+	}
+	conversationID := ids.New()
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO conversations(tenant_id,id,customer_id,channel,channel_ref,status,token_budget)
+		VALUES($1,$2,$3,$4,$5,'open',$6)
+		ON CONFLICT (tenant_id,channel,channel_ref) WHERE channel_ref IS NOT NULL DO NOTHING`,
+		tenantID, conversationID, customerID, channel, channelRef, tokenBudget)
+	if err != nil {
+		return Conversation{}, fmt.Errorf("insert channel conversation: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// A concurrent first message won the race; discard our customer row
+		// with the rollback and adopt the winner.
+		_ = tx.Rollback(ctx)
+		return s.channelConversation(ctx, tenantID, channel, channelRef)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Conversation{}, fmt.Errorf("commit channel conversation: %w", err)
+	}
+	return s.channelConversation(ctx, tenantID, channel, channelRef)
+}
+
+func (s *Store) channelConversation(ctx context.Context, tenantID, channel, channelRef string) (Conversation, error) {
+	var item Conversation
+	err := s.pool.QueryRow(ctx, `
+		SELECT tenant_id,id,customer_id,channel,status,token_budget,tokens_used,tokens_reserved,
+		       consecutive_clarification_failures
+		FROM conversations
+		WHERE tenant_id=$1 AND channel=$2 AND channel_ref=$3`, tenantID, channel, channelRef,
+	).Scan(&item.TenantID, &item.ID, &item.CustomerID, &item.Channel, &item.Status,
+		&item.TokenBudget, &item.TokensUsed, &item.TokensReserved,
+		&item.ConsecutiveClarificationFailures)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Conversation{}, ErrNotFound
+	}
+	if err != nil {
+		return Conversation{}, fmt.Errorf("get channel conversation: %w", err)
+	}
+	return item, nil
+}
+
 // VerifyCapability authenticates a caller for one conversation. It hashes the
 // presented opaque token and compares fixed-size digests in constant time. A
 // token created for another conversation therefore cannot be used merely by

@@ -143,6 +143,61 @@ func TestGetRunRequiresCapabilityForOwningConversation(t *testing.T) {
 	}
 }
 
+func TestStreamEventsReplaysAfterLastEventIDAndRequiresCapability(t *testing.T) {
+	application := &fakeApplication{
+		capabilities: map[string]string{"conversation-a": "token-a"},
+		events: []conversations.Event{
+			{ID: 1, Type: "turn_completed", Payload: []byte(`{"message":"first"}`)},
+			{ID: 2, Type: "turn_completed", Payload: []byte(`{"message":"second"}`)},
+			{ID: 3, Type: "turn_completed", Payload: []byte(`{"message":"third"}`)},
+		},
+	}
+	handler := newTestHandler(application, &fakeTraceReader{}, fakeReady{})
+
+	unauthorized := httptest.NewRequest(http.MethodGet, "/api/v1/demo/conversations/conversation-a/events", nil)
+	unauthorizedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedResponse, unauthorized)
+	if unauthorizedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized stream status=%d", unauthorizedResponse.Code)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/demo/conversations/conversation-a/events", nil).WithContext(ctx)
+	request.Header.Set("Authorization", "Bearer token-a")
+	request.Header.Set("Last-Event-ID", "1")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	body := response.Body.String()
+	if response.Header().Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("Content-Type=%q", response.Header().Get("Content-Type"))
+	}
+	if response.Header().Get("X-Accel-Buffering") != "no" {
+		t.Fatal("stream must disable proxy buffering")
+	}
+	if strings.Contains(body, `"message":"first"`) {
+		t.Fatalf("replay included event at or before Last-Event-ID: %s", body)
+	}
+	if !strings.Contains(body, "id: 2\nevent: turn_completed\ndata: {\"message\":\"second\"}") ||
+		!strings.Contains(body, "id: 3\nevent: turn_completed\ndata: {\"message\":\"third\"}") {
+		t.Fatalf("replay missing later events: %s", body)
+	}
+}
+
+func TestStreamEventsRejectsMalformedCursor(t *testing.T) {
+	application := &fakeApplication{capabilities: map[string]string{"conversation-a": "token-a"}}
+	handler := newTestHandler(application, &fakeTraceReader{}, fakeReady{})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/demo/conversations/conversation-a/events", nil)
+	request.Header.Set("Authorization", "Bearer token-a")
+	request.Header.Set("Last-Event-ID", "not-a-number")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("malformed cursor status=%d", response.Code)
+	}
+}
+
 func TestBearerTokenParsing(t *testing.T) {
 	for _, test := range []struct {
 		header string
@@ -172,6 +227,17 @@ type fakeApplication struct {
 	capabilities map[string]string
 	sent         []string
 	sendErr      error
+	events       []conversations.Event
+}
+
+func (f *fakeApplication) ConversationEvents(_ context.Context, _ string, afterID int64, limit int) ([]conversations.Event, error) {
+	var result []conversations.Event
+	for _, event := range f.events {
+		if event.ID > afterID && len(result) < limit {
+			result = append(result, event)
+		}
+	}
+	return result, nil
 }
 
 func (f *fakeApplication) CreateConversation(context.Context, conversations.Profile) (conversations.Conversation, error) {

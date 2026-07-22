@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -16,12 +17,14 @@ import (
 	"github.com/reinhlord/kontor/internal/app"
 	"github.com/reinhlord/kontor/internal/conversations"
 	"github.com/reinhlord/kontor/internal/platform/ids"
+	"github.com/reinhlord/kontor/web/widget"
 )
 
 type applicationService interface {
 	CreateConversation(context.Context, conversations.Profile) (conversations.Conversation, error)
 	VerifyConversationCapability(context.Context, string, string) error
 	SendMessage(context.Context, string, string, string) (app.TurnResult, error)
+	ConversationEvents(context.Context, string, int64, int) ([]conversations.Event, error)
 }
 
 type traceReader interface {
@@ -49,7 +52,10 @@ func New(application applicationService, trace traceReader, pool readinessChecke
 	mux.HandleFunc("GET /readyz", h.ready)
 	mux.HandleFunc("POST /api/v1/demo/conversations", h.createConversation)
 	mux.HandleFunc("POST /api/v1/demo/conversations/{conversationID}/messages", h.sendMessage)
+	mux.HandleFunc("GET /api/v1/demo/conversations/{conversationID}/events", h.streamEvents)
 	mux.HandleFunc("GET /api/v1/demo/runs/{runID}", h.getRun)
+	mux.HandleFunc("GET /widget/v1/kontor.js", serveStatic("text/javascript; charset=utf-8", widget.Script))
+	mux.HandleFunc("GET /widget/v1/demo", serveStatic("text/html; charset=utf-8", widget.DemoPage))
 	return h.recover(mux)
 }
 
@@ -159,6 +165,19 @@ func (h *Handler) requireConversationCapability(w http.ResponseWriter, r *http.R
 		return false
 	}
 	return true
+}
+
+// serveStatic serves an embedded asset with a short public cache: the widget
+// travels with the binary, so a deploy naturally rolls the content over.
+func serveStatic(contentType string, content []byte) http.HandlerFunc {
+	length := strconv.Itoa(len(content))
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Length", length)
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write(content)
+	}
 }
 
 func bearerToken(header string) (string, bool) {

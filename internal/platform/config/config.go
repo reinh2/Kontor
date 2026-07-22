@@ -17,12 +17,26 @@ type Config struct {
 	DatabaseURL string
 	DemoMode    bool
 
-	Tenant Tenant
-	Agent  Agent
-	LLM    LLM
+	Tenant   Tenant
+	Agent    Agent
+	LLM      LLM
+	Telegram Telegram
 
 	SlotTokenSecret string
 	ShutdownTimeout time.Duration
+
+	HTTP HTTP
+}
+
+type HTTP struct {
+	// AllowedOrigin is the single origin the widget CORS policy accepts, or
+	// "*" for the zero-key demo default. A wildcard cannot carry credentials;
+	// the demo API authorizes via a bearer token, not cookies, so this is safe.
+	AllowedOrigin string
+	// RateLimitPerMinute and RateLimitBurst bound requests from one client IP
+	// using a token bucket, protecting the bounded admission queue upstream.
+	RateLimitPerMinute int
+	RateLimitBurst     int
 }
 
 type Tenant struct {
@@ -50,6 +64,16 @@ type LLM struct {
 	AppURL          string
 	AppTitle        string
 }
+
+// Telegram enables the webhook channel only when both the bot token and the
+// webhook secret are present; the zero-key demo runs without either.
+type Telegram struct {
+	BotToken      string
+	WebhookSecret string
+	APIBaseURL    string
+}
+
+func (t Telegram) Enabled() bool { return t.BotToken != "" && t.WebhookSecret != "" }
 
 func Load() (Config, error) {
 	cfg := Config{
@@ -80,8 +104,18 @@ func Load() (Config, error) {
 			AppURL:          os.Getenv("OPENROUTER_APP_URL"),
 			AppTitle:        env("OPENROUTER_APP_TITLE", "Kontor"),
 		},
+		Telegram: Telegram{
+			BotToken:      os.Getenv("TELEGRAM_BOT_TOKEN"),
+			WebhookSecret: os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
+			APIBaseURL:    env("TELEGRAM_API_BASE_URL", "https://api.telegram.org"),
+		},
 		SlotTokenSecret: env("SLOT_TOKEN_SECRET", "demo-only-change-me-32-bytes-minimum"),
 		ShutdownTimeout: envDuration("SHUTDOWN_TIMEOUT", 35*time.Second),
+		HTTP: HTTP{
+			AllowedOrigin:      env("HTTP_ALLOWED_ORIGIN", "*"),
+			RateLimitPerMinute: envInt("HTTP_RATE_LIMIT_PER_MINUTE", 60),
+			RateLimitBurst:     envInt("HTTP_RATE_LIMIT_BURST", 20),
+		},
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -110,6 +144,21 @@ func Load() (Config, error) {
 	}
 	if len(cfg.SlotTokenSecret) < 32 {
 		return Config{}, errors.New("SLOT_TOKEN_SECRET must contain at least 32 bytes")
+	}
+	if cfg.HTTP.RateLimitPerMinute < 1 {
+		return Config{}, errors.New("HTTP_RATE_LIMIT_PER_MINUTE must be positive")
+	}
+	if cfg.HTTP.RateLimitBurst < 1 {
+		return Config{}, errors.New("HTTP_RATE_LIMIT_BURST must be positive")
+	}
+	if cfg.HTTP.AllowedOrigin == "" {
+		return Config{}, errors.New("HTTP_ALLOWED_ORIGIN must not be empty")
+	}
+	if (cfg.Telegram.BotToken == "") != (cfg.Telegram.WebhookSecret == "") {
+		return Config{}, errors.New("TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET must be set together")
+	}
+	if cfg.Telegram.Enabled() && len(cfg.Telegram.WebhookSecret) < 16 {
+		return Config{}, errors.New("TELEGRAM_WEBHOOK_SECRET must contain at least 16 bytes")
 	}
 	if cfg.LLM.Provider != "fake" && cfg.LLM.Provider != "openrouter" {
 		return Config{}, fmt.Errorf("unsupported LLM_PROVIDER %q", cfg.LLM.Provider)

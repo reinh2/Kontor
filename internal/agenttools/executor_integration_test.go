@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"io/fs"
 	"os"
 	"testing"
 	"time"
@@ -104,12 +105,18 @@ func executorIntegrationPool(t *testing.T) *pgxpool.Pool {
 		admin.Close()
 	})
 
-	migration, err := migrations.Files.ReadFile("000001_stage1.sql")
+	names, err := fs.Glob(migrations.Files, "*.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, string(migration)); err != nil {
-		t.Fatalf("apply Stage 1 migration: %v", err)
+	for _, name := range names {
+		migration, err := migrations.Files.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, string(migration)); err != nil {
+			t.Fatalf("apply migration %s: %v", name, err)
+		}
 	}
 	return pool
 }

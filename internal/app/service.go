@@ -69,6 +69,7 @@ type ConversationStore interface {
 	Get(context.Context, string, string) (conversations.Conversation, error)
 	AppendMessageAt(context.Context, string, string, string, string, string, time.Time) (conversations.Message, error)
 	History(context.Context, string, string, int) ([]conversations.Message, error)
+	EventsAfter(context.Context, string, string, int64, int) ([]conversations.Event, error)
 }
 
 // defaultTurnAdmissionWait bounds both in-process admission and the wait for
@@ -127,6 +128,13 @@ func (s *Service) CreateConversation(ctx context.Context, profile conversations.
 // conversation without exposing tenant or customer selectors at the HTTP edge.
 func (s *Service) VerifyConversationCapability(ctx context.Context, conversationID, capabilityToken string) error {
 	return s.conversations.VerifyCapability(ctx, s.config.TenantID, conversationID, capabilityToken)
+}
+
+// ConversationEvents returns the durable event stream after afterID for SSE
+// replay and polling. Authorization happens at the channel boundary through
+// the conversation capability before this is called.
+func (s *Service) ConversationEvents(ctx context.Context, conversationID string, afterID int64, limit int) ([]conversations.Event, error) {
+	return s.conversations.EventsAfter(ctx, s.config.TenantID, conversationID, afterID, limit)
 }
 
 type TurnResult struct {
@@ -337,7 +345,10 @@ func (s *Service) SendMessage(ctx context.Context, conversationID, text, clientM
 			ClarificationFailures: 3,
 		})
 	} else {
-		outbound, err = s.persistReplyAndFinish(ctx, conversation, runID, startedAt, content, runStatus, clarificationFailures)
+		outbound, err = s.persistReplyAndFinish(
+			ctx, conversation, inbound, runID, startedAt, content, runStatus,
+			clarificationFailures, pendingConfirmation,
+		)
 	}
 	if err != nil {
 		return s.handleSavedTurnFailure(
@@ -404,14 +415,28 @@ func (s *Service) acknowledgeEscalated(
 	content := "Your message is saved for the person handling this conversation. The automated agent will not take further actions."
 	cleanupContext, cancel := boundedCleanupContext(ctx)
 	defer cancel()
+	tx, err := s.pool.Begin(cleanupContext)
+	if err != nil {
+		return TurnResult{}, fmt.Errorf("begin escalated acknowledgement: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	outbound, err := insertAssistantReply(
-		cleanupContext, s.pool, s.config.TenantID, conversation.ID, inbound.ID, "agent-ack:", content,
+		cleanupContext, tx, s.config.TenantID, conversation.ID, inbound.ID, "agent-ack:", content,
 	)
 	if err != nil {
 		// The inbound message is already durable and the conversation is already
 		// with a person; surface the acknowledgement failure honestly instead of
 		// fabricating an agent run for a turn that must not run automation.
 		return TurnResult{}, fmt.Errorf("persist escalated acknowledgement: %w", err)
+	}
+	if err := insertTurnEvent(cleanupContext, tx, s.config.TenantID, conversation.ID, turnEventPayload{
+		InboundMessageID: inbound.ID, MessageID: outbound.ID,
+		Message: content, Outcome: "escalated",
+	}); err != nil {
+		return TurnResult{}, err
+	}
+	if err := tx.Commit(cleanupContext); err != nil {
+		return TurnResult{}, fmt.Errorf("commit escalated acknowledgement: %w", err)
 	}
 	return TurnResult{
 		ConversationID: conversation.ID, MessageID: outbound.ID,
@@ -546,10 +571,12 @@ func (s *Service) handleSavedTurnFailure(
 func (s *Service) persistReplyAndFinish(
 	ctx context.Context,
 	conversation conversations.Conversation,
+	inbound conversations.Message,
 	runID string,
 	startedAt time.Time,
 	content, runStatus string,
 	clarificationFailures int,
+	pendingConfirmation *tools.ConfirmationProposal,
 ) (conversations.Message, error) {
 	cleanupContext, cancel := boundedCleanupContext(ctx)
 	defer cancel()
@@ -570,6 +597,12 @@ func (s *Service) persistReplyAndFinish(
 		WHERE tenant_id=$1 AND id=$2`,
 		s.config.TenantID, conversation.ID, clarificationFailures); err != nil {
 		return conversations.Message{}, fmt.Errorf("persist clarification state: %w", err)
+	}
+	if err := insertTurnEvent(cleanupContext, tx, s.config.TenantID, conversation.ID, turnEventPayload{
+		RunID: runID, InboundMessageID: inbound.ID, MessageID: outbound.ID,
+		Message: content, Outcome: runStatus, PendingConfirmation: pendingConfirmation,
+	}); err != nil {
+		return conversations.Message{}, err
 	}
 	tag, err := tx.Exec(cleanupContext, `
 		UPDATE agent_runs
@@ -623,6 +656,12 @@ func (s *Service) persistHandoff(ctx context.Context, record durableHandoff) (co
 		cleanupContext, tx, s.config.TenantID, record.Conversation.ID, record.RunID, "agent-handoff:", record.Content,
 	)
 	if err != nil {
+		return conversations.Message{}, err
+	}
+	if err := insertTurnEvent(cleanupContext, tx, s.config.TenantID, record.Conversation.ID, turnEventPayload{
+		RunID: record.RunID, InboundMessageID: record.Inbound.ID, MessageID: outbound.ID,
+		Message: record.Content, Outcome: record.RunStatus,
+	}); err != nil {
 		return conversations.Message{}, err
 	}
 	if _, err := tx.Exec(cleanupContext, `
@@ -705,6 +744,33 @@ func (s *Service) persistHandoff(ctx context.Context, record durableHandoff) (co
 
 type replyQuerier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+// turnEventPayload is the widget-facing record of one finished turn. It is
+// written to conversation_events inside the same transaction as the reply it
+// describes, so SSE replay can never expose an uncommitted outcome.
+type turnEventPayload struct {
+	RunID               string                      `json:"run_id,omitempty"`
+	InboundMessageID    string                      `json:"inbound_message_id,omitempty"`
+	MessageID           string                      `json:"message_id"`
+	Message             string                      `json:"message"`
+	Outcome             string                      `json:"outcome"`
+	PendingConfirmation *tools.ConfirmationProposal `json:"pending_confirmation,omitempty"`
+}
+
+func insertTurnEvent(ctx context.Context, tx pgx.Tx, tenantID, conversationID string, payload turnEventPayload) error {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode turn event: %w", err)
+	}
+	// The payload travels as text, not []byte: pgx's simple protocol encodes
+	// byte slices as bytea hex, which PostgreSQL rejects for a jsonb column.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO conversation_events(tenant_id,conversation_id,event_type,payload_json)
+		VALUES($1,$2,'turn_completed',$3)`, tenantID, conversationID, string(encoded)); err != nil {
+		return fmt.Errorf("insert turn event: %w", err)
+	}
+	return nil
 }
 
 func insertAssistantReply(

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"strings"
@@ -177,6 +178,28 @@ func TestStage1ConversationCreatesBookingOnlyAfterConfirmation(t *testing.T) {
 	}
 	if used <= 0 || reserved != 0 || used > budget {
 		t.Fatalf("invalid persisted token accounting: used=%d reserved=%d budget=%d", used, reserved, budget)
+	}
+
+	// Both turns must have committed durable stream events for SSE replay.
+	events, err := components.Conversations.EventsAfter(ctx, cfg.Tenant.ID, conversation.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].ID >= events[1].ID {
+		t.Fatalf("durable turn events=%#v, want two with ascending ids", events)
+	}
+	if !strings.Contains(string(events[0].Payload), `"pending_confirmation"`) {
+		t.Fatalf("proposal event lacks the confirmation payload: %s", events[0].Payload)
+	}
+	if !strings.Contains(string(events[1].Payload), "booked") {
+		t.Fatalf("confirmed event lacks the booked outcome: %s", events[1].Payload)
+	}
+	replayed, err := components.Conversations.EventsAfter(ctx, cfg.Tenant.ID, conversation.ID, events[0].ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 1 || replayed[0].ID != events[1].ID {
+		t.Fatalf("Last-Event-ID replay returned %#v, want only the second event", replayed)
 	}
 }
 
@@ -1121,12 +1144,18 @@ func stage1IntegrationPool(t *testing.T) *pgxpool.Pool {
 		admin.Close()
 	})
 
-	migration, err := migrations.Files.ReadFile("000001_stage1.sql")
+	names, err := fs.Glob(migrations.Files, "*.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, string(migration)); err != nil {
-		t.Fatalf("apply Stage 1 migration: %v", err)
+	for _, name := range names {
+		migration, err := migrations.Files.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, string(migration)); err != nil {
+			t.Fatalf("apply migration %s: %v", name, err)
+		}
 	}
 	return pool
 }
