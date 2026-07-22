@@ -33,7 +33,7 @@ The wider business flow continues by updating the customer in the CRM and sendin
   </tr>
 </table>
 
-The images are static exports from [`design/screens`](design/screens). Stage 2 ships a working customer chat widget; the operator dashboard, trace viewer, and calendar shown here remain static designs without a browser application behind them.
+The images are static exports from [`design/screens`](design/screens). The browser application at `/operator` now replaces those fixture values with authenticated live reads for the dashboard, runs, nested traces, and week calendar. Calendar create/reschedule/cancel commands remain the next Stage 5 slice.
 
 ## What it does
 
@@ -54,6 +54,7 @@ The images are static exports from [`design/screens`](design/screens). Stage 2 s
 - Streams every committed turn over a durable per-conversation SSE channel. Each event is written in the same transaction as the reply it describes and carries a monotonic id, so a reconnecting client resumes from `Last-Event-ID` without gaps or duplicates and never observes an outcome that later disappears.
 - Accepts Telegram Bot API webhooks behind a constant-time secret check, binds each private chat to one conversation, and deduplicates redelivered updates through a persisted `update_id` so a retry acknowledges without running a second agent turn. Outbound replies retry transient Bot API failures with bounded backoff.
 - Protects the turn-admission queue with a per-client-IP token-bucket rate limiter (60 requests per minute, burst 20 by default) and a configurable CORS policy for the widget origin; liveness and readiness probes bypass the limiter.
+- Serves a live operator console for dashboard aggregates, filtered/keyset-paginated runs, full conversation and nested tool-attempt traces, and tenant-timezone calendar reads. Its API is disabled unless an explicit 32+ byte `OPERATOR_ADMIN_TOKEN` is configured, uses constant-time bearer verification, never accepts a browser-supplied tenant, is excluded from the widget's CORS policy, and returns no-store responses. React is pinned and embedded in the API binary so the page that handles this token executes no CDN scripts.
 
 ## Quick start
 
@@ -69,6 +70,8 @@ The service listens on `http://localhost:8080`; [the health endpoint](http://loc
 
 Open [the widget demo page](http://localhost:8080/widget/v1/demo) to try the embeddable chat in a browser; it loads the same `/widget/v1/kontor.js` you would drop into a host site with one `<script>` tag. Connected widgets receive each committed turn over `GET /api/v1/demo/conversations/{id}/events`. To enable the Telegram channel, set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` and register the bot's webhook at `/webhooks/v1/telegram`; without both, the channel stays disabled and the route is not mounted.
 
+To enable the in-progress Stage 5 console, set `OPERATOR_ADMIN_TOKEN` to a random value between 32 and 512 bytes before starting Compose, then open [the operator page](http://localhost:8080/operator) and enter that value. The token is kept only in the current tab's `sessionStorage`; if the variable is absent, the operator API is not mounted. This first live slice is read-only by design while the Stage 4 scheduling lifecycle is hardened for admin actors and optimistic concurrency.
+
 To exercise real tool-calling behavior, copy [`.env.example`](.env.example), set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and `OPENROUTER_MODEL`, then restart Compose. This switches the same bounded agent loop and server-side tool gateway from the deterministic adapter to OpenRouter; it does not bypass confirmation, capabilities, budgets, or scheduling checks.
 
 ## Architecture
@@ -78,6 +81,7 @@ flowchart LR
     Widget["Embeddable widget"] --> Edge
     Telegram["Telegram webhook"] --> Edge
     Client["Demo API client"] --> Edge
+    Operator["Operator console"] --> OperatorAPI["Same-origin operator API<br/>admin bearer token"]
     Edge["HTTP edge<br/>CORS + rate limit"] --> App["Conversation service"]
     App --> Runner["Bounded agent runner"]
     Runner <--> Model["Deterministic demo<br/>or OpenRouter"]
@@ -91,7 +95,9 @@ flowchart LR
     Events -. SSE replay .-> Widget
     Runner --> Trace["Trace and token budget"]
     Trace --> DB
-    Exports["Static UX exports"] -. visualize the intended operator experience .-> Trace
+    OperatorAPI --> Trace
+    OperatorAPI --> DB
+    Exports["Static UX exports"] -. define the visual language .-> Operator
 ```
 
 The model can request actions, but it never owns identity, authorization, or the final scheduling decision. See [Engineering notes](docs/ENGINEERING.md) for the runtime path, persistence model, failure semantics, and test strategy.
@@ -113,12 +119,12 @@ The model can request actions, but it never owns identity, authorization, or the
 Kontor is a demonstration project, not a production booking service.
 
 - It runs as one fixed demo tenant (`Salon Nord`); there is no user identity system, tenant onboarding, or tenant-management UI. The demo API does enforce a generated bearer capability on each conversation after creation, but that is not a full authentication or account system.
-- The HTTP surface is a JSON demo API with an embeddable chat widget, durable SSE streaming, and a Telegram webhook channel wired in Stage 2. The operator dashboard, trace viewer, and calendar shown above remain static designs, not wired application screens.
+- The operator dashboard, runs, trace viewer, and calendar reads are live when the opt-in admin token is configured. Operator identity/RBAC arrives in Stage 6, and Stage 5 calendar write commands are not exposed yet.
 - `list_services`, `list_staff`, `find_slots`, `create_booking`, and `escalate_to_human` execute. Rescheduling, cancellation, and CRM contact/deal contracts remain allowlisted but return `NOT_IMPLEMENTED` for later stages.
 - There is no HubSpot or CSV CRM adapter in this codebase yet, and no outbound email, SMS, or reminder sender. A customer row is stored in Kontor’s own database only.
 - Calendar synchronization is currently a `noop`; PostgreSQL is the appointment source of truth for the demo.
 - Explicit requests for a person, server-side tool refusals, and three consecutive structured clarification outcomes are all enforced hand-offs backed by persisted server state; the model cannot avoid the third-clarification hand-off except by actually resolving the request.
-- The `2.9 s` dashboard median is illustrative fixture data. The backend records individual run durations but does not yet aggregate operational metrics.
+- The live dashboard aggregates run duration and token counts from PostgreSQL. It deliberately reports total tokens rather than a currency cost because provider pricing is not persisted.
 - The default secret and database credentials are demo values and must not be used outside a local environment.
 
 ## Licence

@@ -77,6 +77,26 @@ func (b *fakeBackend) Escalate(_ context.Context, command EscalationCommand) (Es
 	}, nil
 }
 
+func (b *fakeBackend) RescheduleBooking(_ context.Context, command RescheduleBookingCommand) (RescheduleBookingOutcome, error) {
+	return RescheduleBookingOutcome{
+		Booking: Booking{
+			ID: command.BookingID, Status: "confirmed",
+			ServiceID: testService, StaffID: testStaff,
+			StartAt: command.NewStartAt, EndAt: command.NewEndAt,
+			Timezone: command.NewTimezone, Version: 2,
+		},
+	}, nil
+}
+
+func (b *fakeBackend) CancelBooking(_ context.Context, command CancelBookingCommand) (CancelBookingOutcome, error) {
+	return CancelBookingOutcome{
+		Booking: Booking{
+			ID: command.BookingID, Status: "cancelled",
+			ServiceID: testService, StaffID: testStaff, Version: 2,
+		},
+	}, nil
+}
+
 func testTrusted(messageID string) TrustedContext {
 	return TrustedContext{
 		TenantID: testTenant, CustomerID: testCustomer,
@@ -599,15 +619,18 @@ func TestConfirmationRejectsChangedArgumentsAndCrossOwner(t *testing.T) {
 	}
 }
 
-func TestKnownLaterToolReturnsNotImplemented(t *testing.T) {
+func TestCancelBookingRequiresConfirmation(t *testing.T) {
 	gateway := newTestGateway(t, &fakeBackend{}, NewMemoryConfirmationStore())
 	result := gateway.Execute(context.Background(), testTrusted("message-1"), Call{
 		Name: ToolCancel,
 		Arguments: json.RawMessage(`{"booking_id":"66666666-6666-4666-8666-666666666666",` +
 			`"reason":"Plans changed","idempotency_key":"cancel-request-0001"}`),
 	})
-	if result.Error == nil || result.Error.Code != CodeNotImplemented {
-		t.Fatalf("result = %#v", result)
+	if result.Status != StatusConfirmationRequired || result.Confirmation == nil {
+		t.Fatalf("expected confirmation_required, got result = %#v", result)
+	}
+	if result.Confirmation.Action != ToolCancel {
+		t.Fatalf("confirmation action = %s, want %s", result.Confirmation.Action, ToolCancel)
 	}
 }
 

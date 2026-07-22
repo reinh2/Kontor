@@ -18,3 +18,13 @@ var DSStyles []byte
 //
 //go:embed ds-bundle.js
 var DSBundle []byte
+
+// React and ReactDOM are pinned, locally vendored runtime dependencies. The
+// operator page handles an admin token, so no third-party script is allowed to
+// execute in that origin at runtime.
+
+//go:embed vendor/react-18.3.1.production.min.js
+var React []byte
+
+//go:embed vendor/react-dom-18.3.1.production.min.js
+var ReactDOM []byte

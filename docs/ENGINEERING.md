@@ -1,6 +1,6 @@
 # Kontor engineering notes
 
-This document describes the code that exists in the repository today. The runtime is a conversation-to-booking backend that Stage 2 fronts with channel delivery — an embeddable chat widget, a durable SSE stream, and a Telegram webhook. The operator screens in `design/` and `docs/img/` are static product-design exports, not a wired application.
+This document describes the code that exists in the repository today. The runtime is a conversation-to-booking backend with channel delivery, durable reminder/CRM jobs, and an in-progress Stage 5 operator console. The console now reads live dashboard, run, trace, and calendar data; operator calendar commands remain intentionally unmounted until the booking lifecycle has admin-aware audit and optimistic concurrency.
 
 ## Runtime boundary
 
@@ -14,14 +14,15 @@ The implemented path is:
 6. Persist a frozen booking proposal. Only a later, unambiguous customer message can authorize it.
 7. Recheck the slot under a database lock and create the booking and its first event atomically.
 8. Persist the assistant reply and close the agent run, execute a requested `escalate_to_human` hand-off, or write a safe fallback plus escalation and dead-letter event for provider or bounded-loop failures.
+9. Enqueue reminder and CRM work transactionally with a confirmed booking and let the worker claim, retry, complete, or dead-letter it.
 
-The tool contract also names rescheduling, cancellation, and CRM contact/deal operations. The gateway deliberately returns `NOT_IMPLEMENTED` for those calls in Stage 1; `escalate_to_human` is implemented and durably marks the conversation for human follow-up. The contract additionally includes `respond_to_customer`, a runner-local terminal control call: every customer-facing reply must arrive through it, so the reply's disposition (`complete` or `clarification_needed`) is structured data the server can act on rather than prose. Stage 2 adds channel delivery around this same core — an embeddable browser widget, a durable SSE event stream, and a Telegram webhook — but there are still no CRM, notification, or external-calendar adapters in this repository.
+The tool contract includes rescheduling, cancellation, CRM contact/deal operations, and `escalate_to_human`. Booking lifecycle mutations use the same proposal/confirmation boundary as creation; CRM and reminder side effects are durable worker jobs behind adapters. The contract additionally includes `respond_to_customer`, a runner-local terminal control call: every customer-facing reply must arrive through it, so the reply's disposition (`complete` or `clarification_needed`) is structured data the server can act on rather than prose.
 
 ## Stage scope decision
 
 The schema retains `tenant_id` in business primary and foreign keys, but the executable is deliberately scoped to one fixed tenant resolved from configuration. There is no tenant-selection path, provisioning API, onboarding flow, or tenant-management UI in this build.
 
-The Stage 1 forward migration was limited to data used then that also carries forward: catalogue and schedule data, customers and conversations, bookings, confirmation proposals, agent traces, escalations, dead letters, locks, and idempotency records. Stage 2 added a second forward migration with exactly the two channel-delivery tables its runtime needs — a durable per-conversation event stream and a Telegram update-dedupe table. Reminder/outbox tables and later CRM, billing, identity, tenant-administration, and dashboard-projection tables still wait for their implementing stages; the schema does not speculate ahead of the code.
+The Stage 1 forward migration contains the booking runtime; Stage 2 added the durable channel stream and Telegram dedupe; Stage 4 added jobs and dead-letter jobs. Stage 5 reuses the source-of-truth tables and adds only tenant-wide feed/calendar indexes in `000004`, rather than inventing a second dashboard projection. Identity and tenant-administration tables still wait for their implementing stages.
 
 ## Package map
 
@@ -39,6 +40,9 @@ The Stage 1 forward migration was limited to data used then that also carries fo
 | `internal/agentbudget` | Adapter from the runner’s reservation interface to atomic PostgreSQL token accounting |
 | `internal/channels/demohttp` | Demo JSON endpoints, the durable SSE event stream, embedded widget assets, and health/readiness checks |
 | `internal/channels/telegram` | Telegram Bot API webhook with a verified secret and durable update dedupe, plus a bounded retrying sender |
+| `internal/channels/operatorhttp` | Fixed-tenant operator read models, dashboard aggregation, keyset run feed, nested trace context, calendar reads, and temporary admin-token auth |
+| `internal/jobqueue` | Durable worker claim, retry, completion, and dead-letter operations |
+| `internal/notifications`, `internal/crm` | Side-effect ports and demo/real provider adapters used by the worker |
 | `internal/platform/httpx` | Channel-edge middleware: CORS for the widget and a per-client-IP token-bucket rate limiter |
 | `web/widget` | The embeddable single-script chat widget and its demo host page, embedded into the API binary |
 | `internal/bootstrap` | Concrete dependency graph for the application binary |
@@ -105,7 +109,7 @@ agent_run
         └── tool_execution_attempt (1..N)
 ```
 
-Run rows capture status, provider, model, token totals, duration, and a sanitized failure. There is exactly one `tool_executions` parent row per model-emitted call. Each execution attempt is a child `tool_execution_attempts` row whose `attempt_no` starts at 1 and increases under that same parent, so a retry does not become a second sibling call. The runner-local `respond_to_customer` control call is traced as a parent with zero attempts, because it never invokes the executor. `GET /api/v1/demo/runs/{runID}` returns this nested shape, matching the expandable attempt treatment in `design/screens/Kontor Agent Trace.dc.html`. There is no dashboard aggregation query yet.
+Run rows capture status, provider, model, token totals, duration, and a sanitized failure. There is exactly one `tool_executions` parent row per model-emitted call. Each execution attempt is a child `tool_execution_attempts` row whose `attempt_no` starts at 1 and increases under that same parent, so a retry does not become a second sibling call. The runner-local `respond_to_customer` control call is traced as a parent with zero attempts, because it never invokes the executor. The operator detail read enriches this hierarchy with the owning customer, channel, bounded message history, related bookings, and escalation.
 
 Inbound messages are saved before the agent starts. If the provider or bounded loop fails afterward, the service persists a safe assistant fallback, an escalation, the failed run status, and a pending `dead_letter_events` row with sanitized context for later inspection or replay. A policy-refused tool also creates a durable escalation; it does not disappear as a model-only message.
 
@@ -135,6 +139,7 @@ Inbound messages are saved before the agent starts. If the provider or bounded l
 | SSE heartbeat | 15 s | Comment frame that keeps a quiet stream open through proxies |
 | SSE stream lifetime | 10 min | A single stream then closes; the client resumes from its cursor |
 | Telegram send attempts | 3 | Bounded retries for transient Bot API failures |
+| Operator admin token | disabled by default; 32–512 bytes when set | Temporary opt-in Stage 5 read authorization |
 
 Environment-configurable defaults can be inspected in [`.env.example`](../.env.example). The OpenRouter retry and scheduling-window values above are currently code-level safety defaults. Demo credentials and `SLOT_TOKEN_SECRET` are local-only values.
 
@@ -148,7 +153,15 @@ Stage 2 puts three channels in front of the same conversation service. None of t
 
 **Telegram webhook.** `POST /webhooks/v1/telegram` is mounted only when both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` are configured. It compares the `X-Telegram-Bot-Api-Secret-Token` header in constant time and answers an unverified caller with 404 without touching the store or the application. A verified update claims its `update_id` with an idempotent insert; a redelivery that conflicts is acknowledged with 200 and runs no second turn. First contact from a private chat binds that chat to one conversation through a unique `(tenant, channel, channel_ref)` index. The reply is delivered by a sender that retries transient Bot API failures with bounded exponential backoff and honors `Retry-After`, but treats a permanent 4xx as final. Because the update is durably recorded and the turn outcome is persisted, a delivery failure is logged rather than papered over by asking Telegram to redeliver the inbound update.
 
-**Edge protection.** A per-client-IP token-bucket rate limiter (`60` requests per minute, burst `20` by default) sits in front of the bounded turn-admission queue. It keys on the first `X-Forwarded-For` hop because the container runs behind the bundled nginx proxy, and returns `429` with `Retry-After` and a `problem+json` body; liveness and readiness probes bypass it. A CORS layer lets the configured origin — or `*` for the zero-key demo — call the API from a browser. Because the demo authorizes with a bearer capability rather than cookies, credentials are never allowed, so the wildcard origin stays safe.
+**Edge protection.** A per-client-IP token-bucket rate limiter (`60` requests per minute, burst `20` by default) sits in front of the bounded turn-admission queue. It keys on the first `X-Forwarded-For` hop because the container runs behind the bundled nginx proxy, and returns `429` with `Retry-After` and a `problem+json` body; liveness and readiness probes bypass it. A CORS layer lets the configured origin — or `*` for the zero-key demo — call the customer API from a browser. Because the demo authorizes with a bearer capability rather than cookies, credentials are never allowed. The operator API is mounted on a separate, more-specific branch outside that CORS middleware and is callable by its same-origin SPA only.
+
+## Operator read surface
+
+`OPERATOR_ADMIN_TOKEN` is an opt-in Stage 5 boundary: when it is empty, no operator API routes are mounted. When configured, startup hashes the 32–512 byte token once; each presented bearer is hashed and compared in constant time before query parsing or PostgreSQL access. Tenant identity always comes from fixed configuration, responses are `no-store`, and the browser stores the raw value only in tab-scoped `sessionStorage`. The operator page uses pinned React files embedded in the API binary and a restrictive CSP, so no third-party script executes on the page that holds the token.
+
+The read model queries the existing source-of-truth tables and never mutates booking or job state. Dashboard aggregation reports appointments today, terminal-run success rate, median duration, open escalations, and total tokens; currency spend is intentionally absent because provider pricing is not persisted. The run feed supports allowlisted status/channel filters, text search, optional RFC3339 bounds, and opaque `(started_at,id)` keyset pagination. Run detail combines the nested trace with a bounded message history, customer/channel context, related bookings, and escalation. Calendar dates are interpreted in the tenant IANA timezone with an exclusive `to` boundary and include active staff even when they have no appointments.
+
+The SPA polls dashboard/runs/calendar on a bounded interval and polls a trace only while it remains `running`. Operator create/reschedule/cancel endpoints are deliberately absent from this first slice: publishing them requires admin actors in `booking_events`, expected `schedule_version` checks, and reminder rescheduling/cancellation in the same transaction.
 
 ## HTTP API
 
@@ -162,6 +175,11 @@ The handler exposes:
 | `POST` | `/api/v1/demo/conversations/{conversationID}/messages` | Conversation bearer | Persist a customer message and run one agent turn |
 | `GET` | `/api/v1/demo/conversations/{conversationID}/events` | Owning conversation bearer | Replay and follow the durable turn-event stream over SSE |
 | `GET` | `/api/v1/demo/runs/{runID}` | Owning conversation bearer | Read the persisted run and nested tool trace |
+| `GET` | `/api/v1/operator/session` | Operator bearer | Validate the temporary admin token and return fixed-tenant display context |
+| `GET` | `/api/v1/operator/dashboard` | Operator bearer | Read live KPI aggregates, series, outcomes, recent runs, and attention items |
+| `GET` | `/api/v1/operator/runs` | Operator bearer | Filter and keyset-page tenant run summaries |
+| `GET` | `/api/v1/operator/runs/{runID}` | Operator bearer | Read customer/message/booking context and the full nested trace |
+| `GET` | `/api/v1/operator/calendar` | Operator bearer | Read a bounded tenant-timezone calendar range |
 | `GET` | `/widget/v1/kontor.js` | None | Embeddable single-script chat widget |
 | `GET` | `/widget/v1/demo` | None | Minimal host page for the widget |
 | `POST` | `/webhooks/v1/telegram` | Telegram secret header | Telegram Bot API webhook; mounted only when the channel is configured |
@@ -178,9 +196,9 @@ The OpenRouter adapter is wired into the Stage 1 bootstrap, rather than deferred
 
 ## Tests
 
-The default suite covers agent bounds, multi-call ordering, nested one-based attempts, concurrent token reservations, schema and identity rejection, signed token scope, confirmation binding, OpenRouter serialization/retries/errors, timezone and DST behavior, scheduling consistency, bearer-capability isolation, durable escalation, and provider-failure dead letters. Channel tests cover the Telegram webhook's secret rejection without side effects, update deduplication, single-turn processing, and the sender's retry-versus-permanent policy against a fake Bot API, along with the SSE handler's capability check and `Last-Event-ID` replay and the CORS and rate-limiter middleware.
+The default suite covers agent bounds, multi-call ordering, nested one-based attempts, concurrent token reservations, schema and identity rejection, signed token scope, confirmation binding, OpenRouter serialization/retries/errors, timezone and DST behavior, scheduling consistency, bearer-capability isolation, durable escalation, and provider-failure dead letters. Channel tests cover Telegram and SSE delivery plus CORS/rate limiting. Operator HTTP tests prove auth happens before backend access, validate filters/ranges, and check controlled errors and private-cache headers.
 
-PostgreSQL-backed tests exercise the complete save/propose/confirm/book flow, the durable turn events it emits, idempotent booking, trace nesting, conversation serialization, capability isolation, durable failures, and concurrent booking contention when `TEST_DATABASE_URL` is set; otherwise they skip. Run the suites with:
+PostgreSQL-backed tests exercise the complete save/propose/confirm/book flow, the durable turn events it emits, idempotent booking, trace nesting, conversation serialization, capability isolation, durable failures, and concurrent booking contention when `TEST_DATABASE_URL` is set; otherwise they skip. The Stage 5 read-model integration test additionally verifies tenant isolation, stable keyset pagination, dashboard values, nested trace enrichment, calendar overlap semantics, and that all reads leave runtime table counts unchanged. Run the suites with:
 
 ```sh
 make test

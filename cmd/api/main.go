@@ -14,6 +14,7 @@ import (
 	"github.com/reinhlord/kontor/db/migrations"
 	"github.com/reinhlord/kontor/internal/bootstrap"
 	"github.com/reinhlord/kontor/internal/channels/demohttp"
+	"github.com/reinhlord/kontor/internal/channels/operatorhttp"
 	"github.com/reinhlord/kontor/internal/channels/telegram"
 	"github.com/reinhlord/kontor/internal/demo"
 	"github.com/reinhlord/kontor/internal/platform/config"
@@ -69,8 +70,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	root := http.NewServeMux()
-	root.Handle("/", demohttp.New(components.Application, components.Trace, pool, logger))
+	publicRoutes := http.NewServeMux()
+	publicRoutes.Handle("/", demohttp.New(components.Application, components.Trace, pool, logger))
 	if cfg.Telegram.Enabled() {
 		sender, err := telegram.NewBotAPISender(telegram.BotAPIConfig{
 			Token: cfg.Telegram.BotToken, BaseURL: cfg.Telegram.APIBaseURL,
@@ -86,11 +87,33 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		root.Handle("POST /webhooks/v1/telegram", webhook)
+		publicRoutes.Handle("POST /webhooks/v1/telegram", webhook)
 		logger.Info("telegram webhook channel enabled")
 	}
 	limiter := httpx.NewRateLimiter(cfg.HTTP.RateLimitPerMinute, cfg.HTTP.RateLimitBurst)
-	handler := httpx.CORS(cfg.HTTP.AllowedOrigin, limiter.Middleware(root))
+	var operatorHandler http.Handler
+	if cfg.Operator.AdminToken != "" {
+		operatorStore, err := operatorhttp.NewPostgreSQL(
+			pool, components.Trace, cfg.Tenant.ID, cfg.Tenant.Timezone,
+		)
+		if err != nil {
+			return err
+		}
+		operatorHandler, err = operatorhttp.New(operatorhttp.Config{
+			AdminToken: cfg.Operator.AdminToken,
+			Session: operatorhttp.Session{
+				TenantID: cfg.Tenant.ID, TenantName: cfg.Tenant.Name,
+				Timezone: cfg.Tenant.Timezone, Currency: cfg.Tenant.Currency,
+			},
+		}, operatorStore, logger)
+		if err != nil {
+			return err
+		}
+		logger.Info("operator API enabled", "auth", "single-admin-token")
+	} else {
+		logger.Info("operator API disabled", "reason", "OPERATOR_ADMIN_TOKEN is not configured")
+	}
+	handler := buildHTTPHandler(publicRoutes, operatorHandler, limiter, cfg.HTTP.AllowedOrigin)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -123,6 +146,20 @@ func run() error {
 		return fmt.Errorf("graceful HTTP shutdown: %w", err)
 	}
 	return nil
+}
+
+func buildHTTPHandler(publicRoutes, operatorHandler http.Handler, limiter *httpx.RateLimiter, allowedOrigin string) http.Handler {
+	routes := http.NewServeMux()
+	if operatorHandler != nil {
+		// Operator reads are same-origin and deliberately sit outside the
+		// widget's wildcard CORS policy. Register both the exact boundary and
+		// its subtree so neither can fall through to the public branch.
+		operatorEdge := limiter.Middleware(operatorHandler)
+		routes.Handle("/api/v1/operator", operatorEdge)
+		routes.Handle("/api/v1/operator/", operatorEdge)
+	}
+	routes.Handle("/", httpx.CORS(allowedOrigin, limiter.Middleware(publicRoutes)))
+	return routes
 }
 
 func healthcheck(url string) error {

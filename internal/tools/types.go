@@ -280,6 +280,48 @@ type EscalationData struct {
 	Escalation EscalationOutcome `json:"escalation"`
 }
 
+// RescheduleBookingCommand contains the verified inputs for rescheduling.
+type RescheduleBookingCommand struct {
+	TenantID        string
+	OwnerCustomerID string
+	ConversationID  string
+	BookingID       string
+	NewStartAt      time.Time
+	NewEndAt        time.Time
+	NewTimezone     string
+	IdempotencyKey  string
+}
+
+// RescheduleBookingOutcome is returned after a successful reschedule.
+type RescheduleBookingOutcome struct {
+	Booking             Booking
+	IdempotencyReplayed bool
+}
+
+type RescheduleBookingData struct {
+	Booking Booking `json:"booking"`
+}
+
+// CancelBookingCommand contains the verified inputs for cancellation.
+type CancelBookingCommand struct {
+	TenantID        string
+	OwnerCustomerID string
+	ConversationID  string
+	BookingID       string
+	Reason          string
+	IdempotencyKey  string
+}
+
+// CancelBookingOutcome is returned after a successful cancellation.
+type CancelBookingOutcome struct {
+	Booking             Booking
+	IdempotencyReplayed bool
+}
+
+type CancelBookingData struct {
+	Booking Booking `json:"booking"`
+}
+
 // Backend is intentionally narrow so scheduling/Postgres can be adapted
 // without depending on agent/provider types.
 type Backend interface {
@@ -287,6 +329,8 @@ type Backend interface {
 	ListStaff(ctx context.Context, tenantID, serviceID string) ([]Staff, error)
 	FindSlots(ctx context.Context, query FindSlotsQuery) ([]AvailableSlot, error)
 	CreateBooking(ctx context.Context, command CreateBookingCommand) (CreateBookingOutcome, error)
+	RescheduleBooking(ctx context.Context, command RescheduleBookingCommand) (RescheduleBookingOutcome, error)
+	CancelBooking(ctx context.Context, command CancelBookingCommand) (CancelBookingOutcome, error)
 	Escalate(ctx context.Context, command EscalationCommand) (EscalationOutcome, error)
 }
 

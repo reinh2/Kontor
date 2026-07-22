@@ -21,6 +21,7 @@ type Config struct {
 	Agent    Agent
 	LLM      LLM
 	Telegram Telegram
+	Operator Operator
 
 	SlotTokenSecret string
 	ShutdownTimeout time.Duration
@@ -75,6 +76,12 @@ type Telegram struct {
 
 func (t Telegram) Enabled() bool { return t.BotToken != "" && t.WebhookSecret != "" }
 
+// Operator is the temporary Stage 5 authentication boundary. Stage 6 replaces
+// this shared bearer token with operator identities, sessions, and roles.
+type Operator struct {
+	AdminToken string
+}
+
 func Load() (Config, error) {
 	cfg := Config{
 		Environment: env("APP_ENV", "development"),
@@ -108,6 +115,9 @@ func Load() (Config, error) {
 			BotToken:      os.Getenv("TELEGRAM_BOT_TOKEN"),
 			WebhookSecret: os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
 			APIBaseURL:    env("TELEGRAM_API_BASE_URL", "https://api.telegram.org"),
+		},
+		Operator: Operator{
+			AdminToken: os.Getenv("OPERATOR_ADMIN_TOKEN"),
 		},
 		SlotTokenSecret: env("SLOT_TOKEN_SECRET", "demo-only-change-me-32-bytes-minimum"),
 		ShutdownTimeout: envDuration("SHUTDOWN_TIMEOUT", 35*time.Second),
@@ -153,6 +163,9 @@ func Load() (Config, error) {
 	}
 	if cfg.HTTP.AllowedOrigin == "" {
 		return Config{}, errors.New("HTTP_ALLOWED_ORIGIN must not be empty")
+	}
+	if cfg.Operator.AdminToken != "" && (len(cfg.Operator.AdminToken) < 32 || len(cfg.Operator.AdminToken) > 512) {
+		return Config{}, errors.New("OPERATOR_ADMIN_TOKEN must contain between 32 and 512 bytes")
 	}
 	if (cfg.Telegram.BotToken == "") != (cfg.Telegram.WebhookSecret == "") {
 		return Config{}, errors.New("TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET must be set together")

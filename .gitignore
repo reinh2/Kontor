@@ -4,6 +4,8 @@
 ROADMAP.md
 ROADMAP_RU.md
 bin/
+/api
+/worker
+/semantic-review/
 coverage.out
 *.test
-

@@ -166,6 +166,7 @@ func (s *Store) RecordToolExecutionCompleted(ctx context.Context, trace agent.To
 type RunTrace struct {
 	ID               string           `json:"id"`
 	ConversationID   string           `json:"conversation_id"`
+	TriggerMessageID string           `json:"trigger_message_id,omitempty"`
 	Status           string           `json:"status"`
 	Provider         string           `json:"provider"`
 	Model            string           `json:"model"`
@@ -195,34 +196,43 @@ type IterationTrace struct {
 }
 
 type ToolTrace struct {
-	ID         string          `json:"id"`
-	Iteration  int             `json:"iteration"`
-	CallIndex  int             `json:"call_index"`
-	CallCount  int             `json:"call_count"`
-	CallID     string          `json:"call_id"`
-	Name       string          `json:"name"`
-	Arguments  json.RawMessage `json:"arguments"`
-	Result     json.RawMessage `json:"result,omitempty"`
-	Status     string          `json:"status"`
-	DurationMS *int            `json:"duration_ms"`
-	Attempts   []AttemptTrace  `json:"attempts"`
+	ID              string          `json:"id"`
+	Iteration       int             `json:"iteration"`
+	CallIndex       int             `json:"call_index"`
+	CallCount       int             `json:"call_count"`
+	CallID          string          `json:"call_id"`
+	Name            string          `json:"name"`
+	ContractVersion string          `json:"contract_version"`
+	Arguments       json.RawMessage `json:"arguments"`
+	Result          json.RawMessage `json:"result,omitempty"`
+	Status          string          `json:"status"`
+	DurationMS      *int            `json:"duration_ms"`
+	StartedAt       *time.Time      `json:"started_at,omitempty"`
+	FinishedAt      *time.Time      `json:"finished_at,omitempty"`
+	Attempts        []AttemptTrace  `json:"attempts"`
 }
 
 type AttemptTrace struct {
-	AttemptNo  int             `json:"attempt_no"`
-	Status     string          `json:"status"`
-	Result     json.RawMessage `json:"result,omitempty"`
-	DurationMS *int            `json:"duration_ms"`
+	AttemptNo      int             `json:"attempt_no"`
+	Status         string          `json:"status"`
+	Result         json.RawMessage `json:"result,omitempty"`
+	ErrorCode      string          `json:"error_code,omitempty"`
+	ErrorMessage   string          `json:"error_message,omitempty"`
+	Retryable      bool            `json:"retryable"`
+	ProviderStatus *int            `json:"provider_status,omitempty"`
+	DurationMS     *int            `json:"duration_ms"`
+	StartedAt      time.Time       `json:"started_at"`
+	FinishedAt     *time.Time      `json:"finished_at,omitempty"`
 }
 
 func (s *Store) GetRun(ctx context.Context, runID string) (RunTrace, error) {
 	var run RunTrace
 	err := s.pool.QueryRow(ctx, `
-		SELECT id::text,conversation_id::text,status,provider,model,prompt_tokens,
+		SELECT id::text,conversation_id::text,COALESCE(trigger_message_id::text,''),status,provider,model,prompt_tokens,
 		       completion_tokens,duration_ms,COALESCE(error_code,''),COALESCE(error_message,''),
 		       started_at,finished_at
 		FROM agent_runs WHERE tenant_id=$1 AND id=$2`, s.tenantID, runID).
-		Scan(&run.ID, &run.ConversationID, &run.Status, &run.Provider, &run.Model,
+		Scan(&run.ID, &run.ConversationID, &run.TriggerMessageID, &run.Status, &run.Provider, &run.Model,
 			&run.PromptTokens, &run.CompletionTokens, &run.DurationMS, &run.ErrorCode,
 			&run.ErrorMessage, &run.StartedAt, &run.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -267,7 +277,8 @@ func (s *Store) GetRun(ctx context.Context, runID string) (RunTrace, error) {
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT e.id::text,i.iteration_no,e.call_index,e.call_count,e.tool_call_id,e.tool_name,
-		       e.arguments_json,e.result_json,e.status,e.duration_ms
+		       e.contract_version,e.arguments_json,e.result_json,e.status,e.duration_ms,
+		       e.started_at,e.finished_at
 		FROM tool_executions e
 		JOIN agent_iterations i ON i.tenant_id=e.tenant_id AND i.id=e.agent_iteration_id
 		WHERE e.tenant_id=$1 AND e.agent_run_id=$2
@@ -280,7 +291,8 @@ func (s *Store) GetRun(ctx context.Context, runID string) (RunTrace, error) {
 		var tool ToolTrace
 		var result []byte
 		if err := rows.Scan(&tool.ID, &tool.Iteration, &tool.CallIndex, &tool.CallCount,
-			&tool.CallID, &tool.Name, &tool.Arguments, &result, &tool.Status, &tool.DurationMS); err != nil {
+			&tool.CallID, &tool.Name, &tool.ContractVersion, &tool.Arguments, &result,
+			&tool.Status, &tool.DurationMS, &tool.StartedAt, &tool.FinishedAt); err != nil {
 			return RunTrace{}, fmt.Errorf("scan tool trace: %w", err)
 		}
 		tool.Result = result
@@ -301,7 +313,8 @@ func (s *Store) GetRun(ctx context.Context, runID string) (RunTrace, error) {
 
 func (s *Store) getAttempts(ctx context.Context, executionID string) ([]AttemptTrace, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT attempt_no,status,result_json,duration_ms
+		SELECT attempt_no,status,result_json,COALESCE(error_code,''),COALESCE(error_message,''),
+		       retryable,provider_status,duration_ms,started_at,finished_at
 		FROM tool_execution_attempts
 		WHERE tenant_id=$1 AND tool_execution_id=$2
 		ORDER BY attempt_no`, s.tenantID, executionID)
@@ -313,7 +326,9 @@ func (s *Store) getAttempts(ctx context.Context, executionID string) ([]AttemptT
 	for rows.Next() {
 		var item AttemptTrace
 		var payload []byte
-		if err := rows.Scan(&item.AttemptNo, &item.Status, &payload, &item.DurationMS); err != nil {
+		if err := rows.Scan(&item.AttemptNo, &item.Status, &payload, &item.ErrorCode,
+			&item.ErrorMessage, &item.Retryable, &item.ProviderStatus, &item.DurationMS,
+			&item.StartedAt, &item.FinishedAt); err != nil {
 			return nil, fmt.Errorf("scan tool attempt: %w", err)
 		}
 		item.Result = payload

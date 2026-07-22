@@ -22,6 +22,7 @@ var (
 	ErrNotFound            = errors.New("scheduling resource not found")
 	ErrSlotUnavailable     = errors.New("slot is no longer available")
 	ErrIdempotencyConflict = errors.New("idempotency key was used with different arguments")
+	ErrBookingStateConflict = errors.New("booking is not in a state that allows this operation")
 )
 
 // RuleKind distinguishes bookable hours from recurring breaks. Rules use the

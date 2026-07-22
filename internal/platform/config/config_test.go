@@ -70,3 +70,21 @@ func TestLoadRejectsEmptyAllowedOrigin(t *testing.T) {
 		t.Fatal("expected an explicitly empty allowed origin to fail")
 	}
 }
+
+func TestLoadLeavesOperatorAPIOptIn(t *testing.T) {
+	t.Setenv("OPERATOR_ADMIN_TOKEN", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Operator.AdminToken != "" {
+		t.Fatalf("operator admin token = %q, want empty opt-in default", cfg.Operator.AdminToken)
+	}
+}
+
+func TestLoadRejectsShortOperatorAdminToken(t *testing.T) {
+	t.Setenv("OPERATOR_ADMIN_TOKEN", "too-short")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected a short operator admin token to fail")
+	}
+}

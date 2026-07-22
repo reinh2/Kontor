@@ -121,10 +121,14 @@ func (g *Gateway) Execute(ctx context.Context, trusted TrustedContext, call Call
 		return g.findSlots(ctx, trusted, out, arguments)
 	case ToolCreateBooking:
 		return g.createBooking(ctx, trusted, out, arguments)
+	case ToolReschedule:
+		return g.rescheduleBooking(ctx, trusted, out, arguments)
+	case ToolCancel:
+		return g.cancelBooking(ctx, trusted, out, arguments)
 	case ToolEscalate:
 		return g.escalate(ctx, trusted, out, arguments)
 	default:
-		return g.failure(out, CodeNotImplemented, "tool is part of the v1 allowlist but is not implemented in Stage 1", false, "escalate")
+		return g.failure(out, CodeNotImplemented, "tool is part of the v1 allowlist but is not implemented", false, "escalate")
 	}
 }
 
@@ -354,6 +358,142 @@ func trustedCustomerProfile(trusted TrustedContext) (CustomerProfile, bool) {
 
 func (g *Gateway) bookingWindow(now time.Time) (time.Time, time.Time) {
 	return now.Add(g.minBookingLeadTime), now.Add(g.maxBookingHorizon)
+}
+
+type rescheduleBookingArguments struct {
+	BookingID      string `json:"booking_id"`
+	NewSlot        struct {
+		SlotToken string `json:"slot_token"`
+	} `json:"new_slot"`
+	IdempotencyKey string `json:"idempotency_key"`
+	ConfirmationID string `json:"confirmation_id,omitempty"`
+}
+
+func (g *Gateway) rescheduleBooking(ctx context.Context, trusted TrustedContext, result Result, object map[string]any) Result {
+	raw, _ := json.Marshal(object)
+	var arguments rescheduleBookingArguments
+	if err := json.Unmarshal(raw, &arguments); err != nil {
+		return g.failure(result, CodeInvalidArgument, "arguments could not be decoded", false, "fix_arguments")
+	}
+	now := g.now()
+	claims, err := g.signer.Verify(arguments.NewSlot.SlotToken, trusted, now)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrExpiredSlotToken):
+			return g.failure(result, CodeSlotUnavailable, "slot token has expired; find a new slot", false, "find_another_slot")
+		case errors.Is(err, ErrSlotTokenScope):
+			return g.failure(result, CodePolicyDenied, "slot token is not valid for this conversation", false, "escalate")
+		default:
+			return g.failure(result, CodeInvalidArgument, "slot token is invalid or has been tampered with", false, "find_another_slot")
+		}
+	}
+	if !g.slotWithinBookingWindow(claims.StartAt, claims.EndAt, now) {
+		return g.failure(result, CodeSlotUnavailable, "slot is outside the allowed booking window; find a new slot", false, "find_another_slot")
+	}
+	binding := confirmationBinding(trusted, ToolReschedule, object)
+	if arguments.ConfirmationID == "" {
+		confirmationExpiresAt := now.Add(g.confirmationTTL)
+		if claims.ExpiresAt.Before(confirmationExpiresAt) {
+			confirmationExpiresAt = claims.ExpiresAt
+		}
+		proposal, err := g.confirmations.Propose(ctx, binding, ConfirmationProposal{
+			Action: ToolReschedule, Title: "Confirm reschedule",
+			Facts: []ConfirmationFact{
+				{Label: "Booking", Value: arguments.BookingID},
+				{Label: "New time", Value: claims.StartAt.Format(time.RFC3339) + " – " + claims.EndAt.Format(time.RFC3339)},
+				{Label: "Staff", Value: firstNonEmpty(claims.StaffName, claims.StaffID)},
+			},
+			ExpiresAt: confirmationExpiresAt,
+		}, now)
+		if err != nil {
+			return g.failure(result, CodeInternal, "could not create confirmation proposal", true, "retry")
+		}
+		result.Status = StatusConfirmationRequired
+		result.Confirmation = &proposal
+		result.Error = nil
+		return result
+	}
+	if err := g.confirmations.VerifyAuthorized(ctx, arguments.ConfirmationID, binding, now); err != nil {
+		switch {
+		case errors.Is(err, ErrConfirmationExpired):
+			return g.failure(result, CodeConfirmationExpired, "confirmation has expired", false, "ask_customer")
+		case errors.Is(err, ErrConfirmationStale):
+			return g.failure(result, CodeConfirmationStale, "confirmation does not match these arguments", false, "ask_customer")
+		default:
+			return g.failure(result, CodeConfirmationInvalid, "confirmation is not authorized or was already used", false, "ask_customer")
+		}
+	}
+	outcome, err := g.backend.RescheduleBooking(ctx, RescheduleBookingCommand{
+		TenantID: trusted.TenantID, OwnerCustomerID: trusted.CustomerID,
+		ConversationID: trusted.ConversationID, BookingID: arguments.BookingID,
+		NewStartAt: claims.StartAt, NewEndAt: claims.EndAt, NewTimezone: claims.Timezone,
+		IdempotencyKey: arguments.IdempotencyKey,
+	})
+	if err != nil {
+		return g.backendFailure(result, err)
+	}
+	result.SideEffectCommitted = true
+	if err := g.confirmations.MarkConsumed(ctx, arguments.ConfirmationID, binding, now); err != nil {
+		return g.failure(result, CodeInternal, "reschedule succeeded but confirmation finalization must be retried", true, "retry")
+	}
+	return g.success(result, RescheduleBookingData{Booking: outcome.Booking}, outcome.IdempotencyReplayed)
+}
+
+type cancelBookingArguments struct {
+	BookingID      string `json:"booking_id"`
+	Reason         string `json:"reason"`
+	IdempotencyKey string `json:"idempotency_key"`
+	ConfirmationID string `json:"confirmation_id,omitempty"`
+}
+
+func (g *Gateway) cancelBooking(ctx context.Context, trusted TrustedContext, result Result, object map[string]any) Result {
+	raw, _ := json.Marshal(object)
+	var arguments cancelBookingArguments
+	if err := json.Unmarshal(raw, &arguments); err != nil {
+		return g.failure(result, CodeInvalidArgument, "arguments could not be decoded", false, "fix_arguments")
+	}
+	now := g.now()
+	binding := confirmationBinding(trusted, ToolCancel, object)
+	if arguments.ConfirmationID == "" {
+		proposal, err := g.confirmations.Propose(ctx, binding, ConfirmationProposal{
+			Action: ToolCancel, Title: "Confirm cancellation",
+			Facts: []ConfirmationFact{
+				{Label: "Booking", Value: arguments.BookingID},
+				{Label: "Reason", Value: arguments.Reason},
+			},
+			ExpiresAt: now.Add(g.confirmationTTL),
+		}, now)
+		if err != nil {
+			return g.failure(result, CodeInternal, "could not create confirmation proposal", true, "retry")
+		}
+		result.Status = StatusConfirmationRequired
+		result.Confirmation = &proposal
+		result.Error = nil
+		return result
+	}
+	if err := g.confirmations.VerifyAuthorized(ctx, arguments.ConfirmationID, binding, now); err != nil {
+		switch {
+		case errors.Is(err, ErrConfirmationExpired):
+			return g.failure(result, CodeConfirmationExpired, "confirmation has expired", false, "ask_customer")
+		case errors.Is(err, ErrConfirmationStale):
+			return g.failure(result, CodeConfirmationStale, "confirmation does not match these arguments", false, "ask_customer")
+		default:
+			return g.failure(result, CodeConfirmationInvalid, "confirmation is not authorized or was already used", false, "ask_customer")
+		}
+	}
+	outcome, err := g.backend.CancelBooking(ctx, CancelBookingCommand{
+		TenantID: trusted.TenantID, OwnerCustomerID: trusted.CustomerID,
+		ConversationID: trusted.ConversationID, BookingID: arguments.BookingID,
+		Reason: arguments.Reason, IdempotencyKey: arguments.IdempotencyKey,
+	})
+	if err != nil {
+		return g.backendFailure(result, err)
+	}
+	result.SideEffectCommitted = true
+	if err := g.confirmations.MarkConsumed(ctx, arguments.ConfirmationID, binding, now); err != nil {
+		return g.failure(result, CodeInternal, "cancellation succeeded but confirmation finalization must be retried", true, "retry")
+	}
+	return g.success(result, CancelBookingData{Booking: outcome.Booking}, outcome.IdempotencyReplayed)
 }
 
 func (g *Gateway) escalate(ctx context.Context, trusted TrustedContext, result Result, arguments map[string]any) Result {

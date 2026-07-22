@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Kontor · Operator</title>
   <link rel="stylesheet" href="/operator/ds/styles.css">
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="/operator/vendor/react.js"></script>
+  <script src="/operator/vendor/react-dom.js"></script>
   <script src="/operator/ds/bundle.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
@@ -59,13 +59,12 @@
     .legend-dot { width: 8px; height: 8px; border-radius: var(--radius-full); }
 
     /* Data Table */
-    .data-table-wrap { background: var(--surface-1); border: 1px solid var(--border-default); border-radius: var(--radius-lg); overflow: hidden; }
+    .data-table-wrap { background: var(--surface-1); border: 1px solid var(--border-default); border-radius: var(--radius-lg); overflow-x: auto; }
     .data-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body-sm); }
     .data-table th { text-align: left; padding: var(--space-3) var(--space-4); font-size: var(--fs-micro); font-weight: var(--fw-medium); text-transform: uppercase; letter-spacing: var(--ls-caps); color: var(--text-tertiary); border-bottom: 1px solid var(--border-default); background: var(--surface-2); white-space: nowrap; }
     .data-table td { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); }
-    .data-table tr[role="button"] { cursor: pointer; transition: var(--transition-colors); }
-    .data-table tr[role="button"]:hover td { background: var(--surface-hover); }
-    .data-table tr[role="button"]:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+    .data-table tbody tr { transition: var(--transition-colors); }
+    .data-table tbody tr:hover td { background: var(--surface-hover); }
     .data-table .mono { font-family: var(--font-mono); font-size: var(--fs-body-sm); color: var(--text-primary); }
     .data-table .accent { color: var(--text-accent); }
     /* Badge */
@@ -145,17 +144,73 @@
     .cal-staff-cell { padding: var(--space-3); font-size: var(--fs-body-sm); font-weight: var(--fw-medium); color: var(--text-primary); border-bottom: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle); display: flex; align-items: center; }
     .cal-day-cell { padding: var(--space-2); border-bottom: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle); min-height: 80px; position: relative; }
     .cal-booking { background: var(--surface-2); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); padding: var(--space-1-5) var(--space-2); margin-bottom: var(--space-1); font-size: var(--fs-micro); }
-    .cal-booking-name { color: var(--text-primary); font-weight: var(--fw-medium); }
-    .cal-booking-time { font-family: var(--font-mono); color: var(--text-tertiary); font-size: var(--fs-micro); }
+    .cal-booking-name { display: block; color: var(--text-primary); font-weight: var(--fw-medium); }
+    .cal-booking-time { display: block; font-family: var(--font-mono); color: var(--text-tertiary); font-size: var(--fs-micro); }
     .cal-now-line { position: absolute; top: 50%; left: 0; right: 0; height: 2px; background: var(--status-error-fg); z-index: 2; }
     .cal-now-line::before { content: ''; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--status-error-fg); }
 
+    /* Live-data and authentication states */
+    .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+    .auth-shell { min-height: 100vh; display: grid; place-items: center; padding: var(--space-5); background: radial-gradient(circle at 50% 0%, var(--accent-subtle), transparent 38%), var(--bg-base); }
+    .auth-card { width: min(100%, 420px); padding: var(--space-7); border: 1px solid var(--border-default); border-radius: var(--radius-xl); background: var(--surface-1); box-shadow: var(--shadow-overlay); }
+    .auth-brand { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-6); }
+    .auth-card h1 { margin: 0 0 var(--space-2); font-size: var(--fs-h2); }
+    .auth-card p { margin: 0 0 var(--space-5); color: var(--text-secondary); }
+    .field { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+    .field label { font-size: var(--fs-caption); font-weight: var(--fw-medium); color: var(--text-secondary); }
+    .field input, .field select { min-height: 36px; padding: 0 var(--space-3); color: var(--text-primary); background: var(--surface-2); border: 1px solid var(--border-default); border-radius: var(--radius-md); font: inherit; }
+    .field input:focus-visible, .field select:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+    .primary-button, .secondary-button, .text-button { min-height: 34px; padding: 0 var(--space-4); border-radius: var(--radius-md); font: inherit; font-size: var(--fs-body-sm); font-weight: var(--fw-medium); cursor: pointer; }
+    .primary-button { color: var(--text-on-accent); background: var(--accent); border: 1px solid var(--accent); }
+    .secondary-button { color: var(--text-primary); background: var(--surface-2); border: 1px solid var(--border-default); }
+    .text-button { min-height: 28px; padding: 0 var(--space-2); color: var(--text-secondary); background: transparent; border: 0; }
+    .primary-button:focus-visible, .secondary-button:focus-visible, .text-button:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .auth-actions { display: flex; justify-content: flex-end; margin-top: var(--space-4); }
+    .auth-error { margin-top: var(--space-3); color: var(--status-error-fg); font-size: var(--fs-body-sm); }
+    .page-state { min-height: 320px; display: grid; place-items: center; padding: var(--space-8); border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--surface-1); }
+    .loading-stack { width: min(100%, 720px); display: grid; gap: var(--space-3); }
+    .loading-line { height: 14px; border-radius: var(--radius-sm); background: linear-gradient(90deg, var(--skeleton-base) 0%, var(--skeleton-shine) 50%, var(--skeleton-base) 100%); background-size: 200% 100%; animation: live-shimmer 1.4s ease-in-out infinite; }
+    .loading-line:nth-child(2) { width: 74%; }
+    .loading-line:nth-child(3) { width: 88%; }
+    @keyframes live-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+    .resource-toolbar { min-height: 28px; display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); margin-bottom: var(--space-3); color: var(--text-tertiary); font-size: var(--fs-caption); }
+    .refresh-error { margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); border: 1px solid var(--status-error-border); border-radius: var(--radius-md); color: var(--status-error-fg); background: var(--status-error-bg); font-size: var(--fs-body-sm); }
+    .filter-bar { display: grid; grid-template-columns: minmax(200px, 1fr) 180px 180px auto; align-items: end; gap: var(--space-3); margin-bottom: var(--space-4); }
+    .pagination { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-4); }
+    .run-link { color: var(--text-accent); font-family: var(--font-mono); font-size: var(--fs-body-sm); text-decoration: none; }
+    .run-link:hover { text-decoration: underline; }
+    .run-link:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; border-radius: 2px; }
+    .message-empty { padding: var(--space-7); color: var(--text-tertiary); text-align: center; }
+    .msg-bubble { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .timeline-state { margin-left: var(--space-2); color: var(--text-tertiary); font-size: var(--fs-micro); text-transform: capitalize; }
+    .json-details { margin-top: var(--space-2); }
+    .json-details summary { color: var(--text-accent); cursor: pointer; font-size: var(--fs-caption); }
+    .json-details pre { max-height: 240px; overflow: auto; margin: var(--space-2) 0 0; padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); color: var(--text-secondary); background: var(--surface-inset); font: var(--fs-micro)/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .escalation-card { margin-bottom: var(--space-4); padding: var(--space-4); border: 1px solid var(--status-warning-border); border-radius: var(--radius-lg); color: var(--status-warning-fg); background: var(--status-warning-bg); }
+    .calendar-scroll { overflow-x: auto; padding-bottom: var(--space-2); }
+    .calendar-scroll .calendar-grid { min-width: 980px; }
+    .calendar-row { display: contents; }
+    details.cal-booking { display: block; }
+    .cal-booking summary { cursor: pointer; list-style: none; }
+    .cal-booking summary::-webkit-details-marker { display: none; }
+    .cal-booking:focus-within { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+    .cal-booking-detail { padding-top: var(--space-1); color: var(--text-secondary); line-height: 1.4; }
+    .cal-block { padding: var(--space-1-5) var(--space-2); margin-bottom: var(--space-1); border: 1px dashed var(--border-default); border-radius: var(--radius-sm); color: var(--text-tertiary); background: var(--surface-2); font-size: var(--fs-micro); }
+    .mobile-nav { display: none; gap: var(--space-1); padding: var(--space-2); overflow-x: auto; border-bottom: 1px solid var(--border-subtle); background: var(--surface-1); }
+    .mobile-nav .nav-item { width: auto; flex: 0 0 auto; }
+
     /* Bottom dashboard sections */
     .bottom-row { display: grid; grid-template-columns: 2fr 1fr; gap: var(--space-4); margin-top: var(--space-5); }
+    .bottom-row .attention-panel { margin-top: 0; }
 
     /* Responsive */
     @media (max-width: 759px) {
       .sidebar { display: none; }
+      .mobile-nav { display: flex; }
+      .topbar { padding: 0 var(--space-3); }
+      .topbar-sub, .topbar .avatar { display: none; }
+      .content { padding: var(--space-3); }
     }
     @media (max-width: 1100px) {
       .trace-layout { grid-template-columns: 1fr; }
@@ -165,6 +220,14 @@
       .kpi-grid { grid-template-columns: repeat(2, 1fr); }
       .charts-row { grid-template-columns: 1fr; }
       .bottom-row { grid-template-columns: 1fr; }
+      .filter-bar { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 430px) {
+      .filter-bar { grid-template-columns: 1fr; }
+      .range-tabs { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
     }
   </style>
 </head>
@@ -174,83 +237,225 @@
 'use strict';
 var h = React.createElement;
 
-// ── Fixture Data ──────────────────────────────────────────────────────────────
-var RUNS = [
-  { id: 'run_7f3a9c21', customer: 'Marta Lindqvist', channel: 'Telegram', outcome: 'success', duration: '2.94s', tokens: 3847, time: '14:32', date: '2026-07-22' },
-  { id: 'run_a4e1b802', customer: 'Erik Johansson', channel: 'Web widget', outcome: 'success', duration: '1.82s', tokens: 2104, time: '14:18', date: '2026-07-22' },
-  { id: 'run_c9d2f156', customer: 'Lisa Bergman', channel: 'Telegram', outcome: 'escalated', duration: '4.12s', tokens: 5320, time: '13:55', date: '2026-07-22' },
-  { id: 'run_d3a7e491', customer: 'Oscar Nilsson', channel: 'Web widget', outcome: 'success', duration: '2.11s', tokens: 2890, time: '13:40', date: '2026-07-22' },
-  { id: 'run_e5b8c734', customer: 'Anna Ek', channel: 'Telegram', outcome: 'success', duration: '1.95s', tokens: 2456, time: '13:22', date: '2026-07-22' },
-  { id: 'run_f1c9d288', customer: 'Karl Svensson', channel: 'Web widget', outcome: 'failed', duration: '3.67s', tokens: 4102, time: '12:58', date: '2026-07-22' },
-  { id: 'run_a2d4e619', customer: 'Sofia Dahl', channel: 'Telegram', outcome: 'success', duration: '2.30s', tokens: 3011, time: '12:41', date: '2026-07-22' },
-  { id: 'run_b7f2a843', customer: 'Jonas Lund', channel: 'Telegram', outcome: 'success', duration: '1.68s', tokens: 1987, time: '12:15', date: '2026-07-22' },
-  { id: 'run_c4e8d972', customer: 'Maja Forsberg', channel: 'Web widget', outcome: 'success', duration: '2.54s', tokens: 3240, time: '11:50', date: '2026-07-22' },
-  { id: 'run_d9a1b354', customer: 'Henrik Blom', channel: 'Telegram', outcome: 'escalated', duration: '5.01s', tokens: 6120, time: '11:32', date: '2026-07-22' },
-  { id: 'run_e2c5f687', customer: 'Elsa Nyberg', channel: 'Web widget', outcome: 'success', duration: '1.74s', tokens: 2215, time: '11:10', date: '2026-07-22' },
-  { id: 'run_f8a3b219', customer: 'Gustav Holm', channel: 'Telegram', outcome: 'success', duration: '2.88s', tokens: 3560, time: '10:48', date: '2026-07-22' },
-  { id: 'run_a5d7c481', customer: 'Ida Persson', channel: 'Telegram', outcome: 'success', duration: '2.02s', tokens: 2678, time: '10:25', date: '2026-07-22' },
-  { id: 'run_b1e9f652', customer: 'Nils Hedlund', channel: 'Web widget', outcome: 'failed', duration: '3.44s', tokens: 4450, time: '10:02', date: '2026-07-22' },
-  { id: 'run_c6a2d893', customer: 'Astrid Viklund', channel: 'Telegram', outcome: 'success', duration: '1.91s', tokens: 2340, time: '09:38', date: '2026-07-22' }
-];
+// ── Live API and formatting ──────────────────────────────────────────────────
+var API_BASE = '/api/v1/operator';
+var TOKEN_KEY = 'kontor.operator.admin-token';
+var DS = window.KontorKanonDesignSystem_452420 || {};
 
-var TRACE_STEPS = [
-  { id: 1, t: '14:32:07', title: 'list_services', state: 'success', duration: '120ms', tokens: 312 },
-  { id: 2, t: '14:32:08', title: 'list_staff', state: 'success', duration: '95ms', tokens: 287 },
-  { id: 3, t: '14:32:08', title: 'find_slots', state: 'retried', duration: '2.1s', tokens: 1840, retries: [
-    { attempt: 1, state: 'failed', detail: 'Calendar provider timeout (504)', duration: '1.8s' },
-    { attempt: 2, state: 'success', detail: 'Returned 3 available slots', duration: '290ms' }
-  ]},
-  { id: 4, t: '14:32:11', title: 'create_booking', state: 'success', duration: '180ms', tokens: 524 },
-  { id: 5, t: '14:32:11', title: 'upsert_crm_contact', state: 'success', duration: '65ms', tokens: 198 },
-  { id: 6, t: '14:32:12', title: 'respond_to_customer', state: 'running', duration: '...', tokens: 686 }
-];
+function storedToken() {
+  try { return window.sessionStorage.getItem(TOKEN_KEY) || ''; } catch (_) { return ''; }
+}
 
-var MESSAGES = [
-  { from: 'user', text: 'Sometime Thursday evening', time: '14:32' },
-  { from: 'agent', text: 'Here are the available slots for Thursday evening:\n\n17:00, 18:00, 18:30\n\nWhich one works best for you?', time: '14:32' },
-  { from: 'user', text: '18:30 works', time: '14:32' },
-  { from: 'agent', text: 'Your appointment is booked for Thursday at 18:30 with Alex Rivera. See you then!', time: '14:32' }
-];
+function saveToken(token) {
+  try {
+    if (token) window.sessionStorage.setItem(TOKEN_KEY, token);
+    else window.sessionStorage.removeItem(TOKEN_KEY);
+  } catch (_) {}
+}
 
-var ATTENTION_ITEMS = [
-  { type: 'warning', title: 'Escalated: customer requesting refund', ref: 'run_c9d2f156', action: 'Review' },
-  { type: 'error', title: 'Failed: booking provider unreachable', ref: 'run_f1c9d288', action: 'Review' },
-  { type: 'warning', title: 'Escalated: repeat customer complaint', ref: 'run_d9a1b354', action: 'Review' },
-  { type: 'error', title: 'Failed: CRM sync timeout after retries', ref: 'run_b1e9f652', action: 'Review' }
-];
+function errorMessage(error) {
+  if (!error) return 'The request could not be completed.';
+  if (error.problem && error.problem.detail) return error.problem.detail;
+  if (error.problem && error.problem.title) return error.problem.title;
+  return error.message || 'The request could not be completed.';
+}
 
-var CALENDAR_BOOKINGS = {
-  'Alex Rivera': {
-    Mon: [{ name: 'Marta L.', time: '10:00' }, { name: 'Erik J.', time: '14:30' }],
-    Tue: [{ name: 'Anna Ek', time: '09:00' }],
-    Wed: [],
-    Thu: [{ name: 'Lisa B.', time: '11:00' }, { name: 'Marta L.', time: '18:30' }],
-    Fri: [{ name: 'Oscar N.', time: '16:00' }],
-    Sat: [],
-    Sun: []
-  },
-  'Jordan Kim': {
-    Mon: [{ name: 'Sofia D.', time: '11:30' }],
-    Tue: [{ name: 'Jonas L.', time: '10:00' }, { name: 'Maja F.', time: '15:00' }],
-    Wed: [{ name: 'Karl S.', time: '13:00' }],
-    Thu: [],
-    Fri: [{ name: 'Henrik B.', time: '09:30' }],
-    Sat: [{ name: 'Elsa N.', time: '10:00' }],
-    Sun: []
-  },
-  'Sam Park': {
-    Mon: [],
-    Tue: [{ name: 'Gustav H.', time: '14:00' }],
-    Wed: [{ name: 'Ida P.', time: '11:00' }, { name: 'Nils H.', time: '16:30' }],
-    Thu: [{ name: 'Astrid V.', time: '10:00' }],
-    Fri: [],
-    Sat: [],
-    Sun: []
+async function fetchJSON(path, signal) {
+  var token = storedToken();
+  var response;
+  try {
+    response = await window.fetch(API_BASE + path, {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: 'Bearer ' + token },
+      cache: 'no-store',
+      signal: signal
+    });
+  } catch (error) {
+    if (error && error.name === 'AbortError') throw error;
+    var networkError = new Error('Kontor could not reach the operator API.');
+    networkError.cause = error;
+    throw networkError;
   }
-};
 
-var DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-var DATES = ['Jul 21', 'Jul 22', 'Jul 23', 'Jul 24', 'Jul 25', 'Jul 26', 'Jul 27'];
+  var body = null;
+  var text = await response.text();
+  if (text) {
+    try { body = JSON.parse(text); }
+    catch (_) { body = { detail: 'The server returned an unreadable response.' }; }
+  }
+  if (!response.ok) {
+    var requestError = new Error((body && (body.detail || body.title)) || ('HTTP ' + response.status));
+    requestError.status = response.status;
+    requestError.problem = body;
+    if (response.status === 401) window.dispatchEvent(new Event('kontor:operator-unauthorized'));
+    throw requestError;
+  }
+  return body;
+}
+
+function usePollingResource(key, loader, pollInterval, enabled) {
+  var initial = { data: null, loading: !!enabled, refreshing: false, error: null, updatedAt: null };
+  var statePair = React.useState(initial);
+  var state = statePair[0];
+  var setState = statePair[1];
+  var retryPair = React.useState(0);
+  var retryNonce = retryPair[0];
+  var setRetryNonce = retryPair[1];
+  var loaderRef = React.useRef(loader);
+  var intervalRef = React.useRef(pollInterval);
+  loaderRef.current = loader;
+  intervalRef.current = pollInterval;
+
+  React.useEffect(function() {
+    if (!enabled) {
+      setState({ data: null, loading: false, refreshing: false, error: null, updatedAt: null });
+      return undefined;
+    }
+    var active = true;
+    var controller = null;
+    var timer = null;
+    var waitingForVisibility = false;
+    var latestData = null;
+
+    setState({ data: null, loading: true, refreshing: false, error: null, updatedAt: null });
+
+    function nextDelay(data) {
+      var value = intervalRef.current;
+      return typeof value === 'function' ? Number(value(data)) || 0 : Number(value) || 0;
+    }
+
+    function schedule(data) {
+      var delay = nextDelay(data);
+      if (!active || delay <= 0) return;
+      if (document.hidden) {
+        waitingForVisibility = true;
+        return;
+      }
+      timer = window.setTimeout(function() { run(false); }, delay);
+    }
+
+    async function run(first) {
+      if (!active) return;
+      controller = new AbortController();
+      if (!first) {
+        setState(function(previous) { return Object.assign({}, previous, { refreshing: true, error: null }); });
+      }
+      try {
+        var data = await loaderRef.current(controller.signal);
+        if (!active) return;
+        latestData = data;
+        setState({ data: data, loading: false, refreshing: false, error: null, updatedAt: new Date() });
+        schedule(data);
+      } catch (error) {
+        if (!active || (error && error.name === 'AbortError')) return;
+        setState(function(previous) {
+          return Object.assign({}, previous, { loading: false, refreshing: false, error: error });
+        });
+        schedule(latestData);
+      }
+    }
+
+    function onVisibility() {
+      if (!document.hidden && waitingForVisibility) {
+        waitingForVisibility = false;
+        run(false);
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility);
+    run(true);
+    return function() {
+      active = false;
+      if (timer) window.clearTimeout(timer);
+      if (controller) controller.abort();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [key, enabled, retryNonce]);
+
+  state.retry = function() { setRetryNonce(function(value) { return value + 1; }); };
+  return state;
+}
+
+function formatNumber(value) {
+  return new Intl.NumberFormat().format(Number(value) || 0);
+}
+
+function formatPercent(value) {
+  return new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(Number(value) || 0);
+}
+
+function formatDuration(value) {
+  if (value === null || value === undefined) return '\u2014';
+  var ms = Number(value);
+  if (ms < 1000) return Math.round(ms) + 'ms';
+  return (ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 }) + 's';
+}
+
+function formatInstant(value, timezone, options) {
+  if (!value) return '\u2014';
+  var date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '\u2014';
+  var defaults = { timeZone: timezone || 'UTC', dateStyle: 'medium', timeStyle: 'short' };
+  return new Intl.DateTimeFormat(undefined, Object.assign(defaults, options || {})).format(date);
+}
+
+function formatTime(value, timezone) {
+  return formatInstant(value, timezone, { dateStyle: undefined, timeStyle: 'short' });
+}
+
+function channelLabel(channel) {
+  return ({ telegram: 'Telegram', demo: 'Web / demo', web: 'Web', operator: 'Operator' })[channel] || channel || 'Unknown';
+}
+
+function statusLabel(status) {
+  return String(status || 'unknown').replace(/_/g, ' ').replace(/^./, function(value) { return value.toUpperCase(); });
+}
+
+function statusTone(status) {
+  if (status === 'completed' || status === 'succeeded' || status === 'success' || status === 'confirmed') return 'success';
+  if (status === 'escalated' || status === 'retried' || status === 'confirmation_required' || status === 'claimed') return 'warning';
+  if (status === 'failed' || status === 'budget_exhausted' || status === 'cancelled' || status === 'dead') return 'error';
+  return 'neutral';
+}
+
+function safeJSON(value) {
+  if (value === undefined || value === null || value === '') return '';
+  try {
+    if (typeof value === 'string') return JSON.stringify(JSON.parse(value), null, 2);
+    return JSON.stringify(value, null, 2);
+  } catch (_) { return String(value); }
+}
+
+function dateKeyInTimezone(value, timezone) {
+  var date = value instanceof Date ? value : new Date(value);
+  var parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(date);
+  var result = {};
+  parts.forEach(function(part) { if (part.type !== 'literal') result[part.type] = part.value; });
+  return result.year + '-' + result.month + '-' + result.day;
+}
+
+function parseDateKey(value) {
+  var bits = String(value).split('-').map(Number);
+  return new Date(Date.UTC(bits[0], bits[1] - 1, bits[2], 12));
+}
+
+function addDays(value, days) {
+  var date = parseDateKey(value);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function startOfWeek(value) {
+  var date = parseDateKey(value);
+  var offset = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - offset);
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDateKey(value, options) {
+  return new Intl.DateTimeFormat(undefined, Object.assign({ timeZone: 'UTC', month: 'short', day: 'numeric' }, options || {})).format(parseDateKey(value));
+}
 
 // ── SVG Icons (inline) ───────────────────────────────────────────────────────
 function Icon(props) {
@@ -269,57 +474,65 @@ function Icon(props) {
 
 // ── Components ────────────────────────────────────────────────────────────────
 
+var NAV_ITEMS = [
+  { key: 'dashboard', label: 'Dashboard', icon: 'dashboard', hash: '#/' },
+  { key: 'runs', label: 'Runs', icon: 'runs', hash: '#/runs' },
+  { key: 'calendar', label: 'Calendar', icon: 'calendar', hash: '#/calendar' }
+];
+
+function NavLinks(props) {
+  return NAV_ITEMS.map(function(item) {
+    var isActive = props.current === item.key;
+    return h('a', {
+      key: item.key,
+      className: 'nav-item' + (isActive ? ' active' : ''),
+      href: item.hash,
+      'aria-current': isActive ? 'page' : undefined
+    }, h(Icon, { name: item.icon }), item.label);
+  });
+}
+
 function Sidebar(props) {
-  var nav = [
-    { key: 'dashboard', label: 'Dashboard', icon: 'dashboard', hash: '#/' },
-    { key: 'runs', label: 'Runs', icon: 'runs', hash: '#/runs' },
-    { key: 'calendar', label: 'Calendar', icon: 'calendar', hash: '#/calendar' },
-    { key: 'settings', label: 'Settings', icon: 'settings', hash: '#/settings' }
-  ];
-  return h('aside', { className: 'sidebar', role: 'navigation', 'aria-label': 'Main navigation' },
+  return h('aside', { className: 'sidebar', 'aria-label': 'Operator navigation' },
     h('div', { className: 'sidebar-brand' },
       h('div', { className: 'sidebar-monogram' }, 'K'),
       h('span', { className: 'sidebar-title' }, 'Kontor')
     ),
-    h('nav', { className: 'sidebar-nav' },
-      nav.map(function(item) {
-        var isActive = props.current === item.key;
-        return h('button', {
-          key: item.key,
-          className: 'nav-item' + (isActive ? ' active' : ''),
-          onClick: function() { window.location.hash = item.hash; },
-          'aria-current': isActive ? 'page' : undefined,
-          tabIndex: 0
-        }, h(Icon, { name: item.icon }), item.label);
-      })
-    ),
+    h('nav', { className: 'sidebar-nav', 'aria-label': 'Main' }, h(NavLinks, { current: props.current })),
     h('div', { className: 'sidebar-bottom' },
-      h('div', { className: 'avatar avatar-accent' }, 'SM'),
+      h('div', { className: 'avatar avatar-accent', 'aria-hidden': 'true' }, 'OP'),
       h('div', null,
-        h('div', { className: 'sidebar-user-name' }, 'Sofia Meyer'),
-        h('div', { className: 'sidebar-user-sub' }, 'Salon Nord')
+        h('div', { className: 'sidebar-user-name' }, 'Operator'),
+        h('div', { className: 'sidebar-user-sub' }, props.session.tenant_name)
       )
     )
   );
 }
 
+function MobileNav(props) {
+  return h('nav', { className: 'mobile-nav', 'aria-label': 'Mobile navigation' }, h(NavLinks, { current: props.current }));
+}
+
 function Topbar(props) {
-  var titles = { dashboard: 'Dashboard', runs: 'Runs', trace: 'Agent Trace', calendar: 'Calendar', settings: 'Settings' };
+  var titles = { dashboard: 'Dashboard', runs: 'Runs', trace: 'Agent Trace', calendar: 'Calendar' };
   return h('header', { className: 'topbar' },
     h('div', { className: 'topbar-left' },
       h('span', { className: 'topbar-title' }, titles[props.current] || 'Dashboard'),
-      h('span', { className: 'topbar-sub' }, 'Salon Nord \u00b7 Last 7 days')
+      h('span', { className: 'topbar-sub' }, props.session.tenant_name + ' \u00b7 ' + props.session.timezone)
     ),
     h('div', { className: 'topbar-right' },
-      h('div', { className: 'range-tabs', role: 'tablist' },
-        ['7d', '30d', 'All'].map(function(r) {
+      props.current === 'dashboard' ? h('div', { className: 'range-tabs', role: 'group', 'aria-label': 'Dashboard period' },
+        ['7d', '30d', '90d'].map(function(r) {
           return h('button', {
-            key: r, className: 'range-tab' + (r === '7d' ? ' active' : ''),
-            role: 'tab', 'aria-selected': r === '7d' ? 'true' : 'false', tabIndex: 0
+            key: r,
+            type: 'button',
+            className: 'range-tab' + (r === props.range ? ' active' : ''),
+            'aria-pressed': r === props.range ? 'true' : 'false',
+            onClick: function() { props.onRangeChange(r); }
           }, r);
         })
-      ),
-      h('div', { className: 'avatar avatar-accent' }, 'SM')
+      ) : null,
+      h('button', { type: 'button', className: 'text-button', onClick: props.onLogout }, 'Log out')
     )
   );
 }
@@ -329,332 +542,697 @@ function Badge(props) {
   return h('span', { className: 'badge badge-' + tone }, props.children);
 }
 
-function outcomeTone(outcome) {
-  if (outcome === 'success') return 'success';
-  if (outcome === 'escalated') return 'warning';
-  if (outcome === 'failed') return 'error';
-  return 'neutral';
-}
+function AuthGate(props) {
+  var tokenPair = React.useState('');
+  var token = tokenPair[0];
+  var setToken = tokenPair[1];
+  var busyPair = React.useState(false);
+  var busy = busyPair[0];
+  var setBusy = busyPair[1];
+  var errorPair = React.useState('');
+  var error = errorPair[0];
+  var setError = errorPair[1];
 
-// ── Screen: Dashboard ─────────────────────────────────────────────────────────
+  async function submit(event) {
+    event.preventDefault();
+    var candidate = token.trim();
+    if (!candidate) {
+      setError('Enter the admin token.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    saveToken(candidate);
+    try {
+      await fetchJSON('/session');
+      props.onAuthenticated(candidate);
+    } catch (requestError) {
+      saveToken('');
+      setError(requestError.status === 401 ? 'That admin token was not accepted.' : errorMessage(requestError));
+    } finally {
+      setBusy(false);
+    }
+  }
 
-function DashboardScreen() {
-  var kpis = [
-    { label: 'Bookings today', value: '12', delta: '+3', deltaDir: 'positive' },
-    { label: 'Total runs', value: '847', delta: '+24', deltaDir: 'positive' },
-    { label: 'Success rate', value: '94.2%', delta: '+1.2%', deltaDir: 'positive' },
-    { label: 'Median latency', value: '2.94s', delta: '-0.3s', deltaDir: 'positive' },
-    { label: 'Escalations', value: '3', delta: '+1', deltaDir: 'negative' },
-    { label: 'Token spend', value: '$12.40', delta: '-$0.80', deltaDir: 'positive' }
-  ];
-
-  return h('div', null,
-    // KPI row
-    h('div', { className: 'kpi-grid' },
-      kpis.map(function(k, i) {
-        return h('div', { key: i, className: 'kpi-card' },
-          h('div', { className: 'kpi-label' }, k.label),
-          h('div', { className: 'kpi-value' }, k.value),
-          h('div', { className: 'kpi-sparkline' },
-            h('svg', { width: '100%', height: 34, 'aria-hidden': 'true' },
-              h('polyline', {
-                points: generateSparkline(i),
-                fill: 'none',
-                stroke: 'var(--viz-1)',
-                strokeWidth: 1.5,
-                strokeLinecap: 'round',
-                strokeLinejoin: 'round'
-              })
-            )
-          ),
-          k.delta ? h('div', { className: 'kpi-delta ' + k.deltaDir }, k.delta) : null
-        );
-      })
-    ),
-    // Charts row
-    h('div', { className: 'charts-row' },
-      h('div', { className: 'chart-card' },
-        h('div', { className: 'chart-title' }, 'Bookings per day'),
-        h('div', { className: 'chart-subtitle' }, 'Last 30 days \u00b7 by channel'),
-        h('svg', { width: '100%', height: 160, viewBox: '0 0 400 160', 'aria-label': 'Bar chart showing bookings per day by channel' },
-          renderBarChart()
-        ),
-        h('div', { className: 'chart-legend' },
-          h('span', { className: 'legend-item' }, h('span', { className: 'legend-dot', style: { background: 'var(--viz-1)' } }), 'Telegram'),
-          h('span', { className: 'legend-item' }, h('span', { className: 'legend-dot', style: { background: 'var(--viz-2)' } }), 'Web widget')
-        )
+  return h('main', { className: 'auth-shell' },
+    h('form', { className: 'auth-card', onSubmit: submit, 'aria-busy': busy ? 'true' : 'false' },
+      h('div', { className: 'auth-brand' },
+        h('div', { className: 'sidebar-monogram', 'aria-hidden': 'true' }, 'K'),
+        h('span', { className: 'sidebar-title' }, 'Kontor')
       ),
-      h('div', { className: 'chart-card' },
-        h('div', { className: 'chart-title' }, 'Run outcomes'),
-        h('svg', { width: 160, height: 160, viewBox: '0 0 160 160', 'aria-label': 'Donut chart showing run outcomes', style: { display: 'block', margin: '0 auto' } },
-          renderDonut()
-        ),
-        h('div', { className: 'chart-legend', style: { justifyContent: 'center' } },
-          h('span', { className: 'legend-item' }, h('span', { className: 'legend-dot', style: { background: 'var(--viz-1)' } }), 'Completed 75%'),
-          h('span', { className: 'legend-item' }, h('span', { className: 'legend-dot', style: { background: 'var(--viz-4)' } }), 'Escalated 15%'),
-          h('span', { className: 'legend-item' }, h('span', { className: 'legend-dot', style: { background: 'var(--viz-6)' } }), 'Failed 10%')
-        )
-      )
-    ),
-    // Recent runs table + attention panel
-    h('div', { className: 'bottom-row' },
-      h('div', { className: 'data-table-wrap' },
-        h('table', { className: 'data-table' },
-          h('thead', null,
-            h('tr', null,
-              h('th', { scope: 'col' }, 'Run ID'),
-              h('th', { scope: 'col' }, 'Customer'),
-              h('th', { scope: 'col' }, 'Channel'),
-              h('th', { scope: 'col' }, 'Outcome'),
-              h('th', { scope: 'col' }, 'Duration'),
-              h('th', { scope: 'col' }, 'Time')
-            )
-          ),
-          h('tbody', null,
-            RUNS.slice(0, 8).map(function(r) {
-              return h('tr', { key: r.id, role: 'button', tabIndex: 0, onClick: function() { window.location.hash = '#/trace'; }, onKeyDown: function(e) { if (e.key === 'Enter') window.location.hash = '#/trace'; } },
-                h('td', { className: 'mono accent' }, r.id),
-                h('td', null, r.customer),
-                h('td', null, r.channel),
-                h('td', null, h(Badge, { tone: outcomeTone(r.outcome) }, r.outcome)),
-                h('td', { className: 'mono' }, r.duration),
-                h('td', { className: 'mono' }, r.time)
-              );
-            })
-          )
-        )
-      ),
-      h('div', { className: 'attention-panel' },
-        h('div', { className: 'attention-title' }, 'Needs attention'),
-        ATTENTION_ITEMS.map(function(item, i) {
-          return h('div', { key: i, className: 'attention-item' },
-            h('div', { className: 'attention-dot ' + item.type }),
-            h('div', { className: 'attention-body' },
-              h('div', { className: 'attention-item-title' }, item.title),
-              h('div', { className: 'attention-ref' }, item.ref)
-            ),
-            h('button', { className: 'attention-action', onClick: function() { window.location.hash = '#/trace'; } }, item.action)
-          );
+      h('h1', null, 'Operator access'),
+      h('p', null, 'Enter the temporary Stage 5 admin token. It stays in this browser tab and is never added to the URL.'),
+      h('div', { className: 'field' },
+        h('label', { htmlFor: 'operator-token' }, 'Admin token'),
+        h('input', {
+          id: 'operator-token', type: 'password', autoComplete: 'current-password', value: token,
+          disabled: busy, spellCheck: 'false', onChange: function(event) { setToken(event.target.value); },
+          autoFocus: true
         })
+      ),
+      error ? h('div', { className: 'auth-error', role: 'alert' }, error) : null,
+      h('div', { className: 'auth-actions' },
+        h('button', { type: 'submit', className: 'primary-button', disabled: busy }, busy ? 'Checking\u2026' : 'Continue')
       )
     )
   );
 }
 
-function generateSparkline(seed) {
-  var points = [];
-  var y = 17;
-  for (var i = 0; i < 12; i++) {
-    y = Math.max(4, Math.min(30, y + (Math.sin(seed * 3 + i) * 8)));
-    points.push(Math.round(i * 12) + ',' + Math.round(y));
-  }
-  return points.join(' ');
+function LoadingState(props) {
+  return h('div', { className: 'page-state', role: 'status', 'aria-live': 'polite' },
+    h('span', { className: 'sr-only' }, props.label || 'Loading'),
+    h('div', { className: 'loading-stack', 'aria-hidden': 'true' },
+      h('div', { className: 'loading-line' }),
+      h('div', { className: 'loading-line' }),
+      h('div', { className: 'loading-line' }),
+      h('div', { className: 'loading-line' })
+    )
+  );
 }
 
-function renderBarChart() {
-  var bars = [];
-  var barW = 12;
-  var gap = 14;
-  for (var i = 0; i < 15; i++) {
-    var h1 = 30 + Math.round(Math.sin(i * 0.8) * 20 + Math.cos(i * 1.2) * 15);
-    var h2 = 20 + Math.round(Math.cos(i * 1.1) * 15 + Math.sin(i * 0.5) * 10);
-    var x = 20 + i * (barW * 2 + gap);
-    bars.push(h('rect', { key: 'a' + i, x: x, y: 150 - h1, width: barW, height: h1, fill: 'var(--viz-1)', rx: 2 }));
-    bars.push(h('rect', { key: 'b' + i, x: x + barW + 2, y: 150 - h2, width: barW, height: h2, fill: 'var(--viz-2)', rx: 2 }));
-  }
-  return bars;
+function ErrorView(props) {
+  var content = DS.ErrorState ? h(DS.ErrorState, {
+    title: props.title || 'Could not load this view',
+    description: errorMessage(props.error),
+    detail: props.error && props.error.status ? 'HTTP ' + props.error.status : undefined,
+    onRetry: props.onRetry
+  }) : h('div', null,
+    h('h2', null, props.title || 'Could not load this view'),
+    h('p', null, errorMessage(props.error)),
+    h('button', { type: 'button', className: 'secondary-button', onClick: props.onRetry }, 'Try again')
+  );
+  return h('div', { className: 'page-state', role: 'alert' }, content);
 }
 
-function renderDonut() {
-  function arc(cx, cy, r, startAngle, endAngle) {
-    var s = startAngle * Math.PI / 180;
-    var e = endAngle * Math.PI / 180;
-    var x1 = cx + r * Math.cos(s), y1 = cy + r * Math.sin(s);
-    var x2 = cx + r * Math.cos(e), y2 = cy + r * Math.sin(e);
-    var large = endAngle - startAngle > 180 ? 1 : 0;
-    return 'M ' + x1 + ' ' + y1 + ' A ' + r + ' ' + r + ' 0 ' + large + ' 1 ' + x2 + ' ' + y2;
-  }
-  var r = 60, cx = 80, cy = 80;
-  return [
-    h('path', { key: 'd1', d: arc(cx, cy, r, 0, 270), fill: 'none', stroke: 'var(--viz-1)', strokeWidth: 20, strokeLinecap: 'round' }),
-    h('path', { key: 'd2', d: arc(cx, cy, r, 274, 328), fill: 'none', stroke: 'var(--viz-4)', strokeWidth: 20, strokeLinecap: 'round' }),
-    h('path', { key: 'd3', d: arc(cx, cy, r, 332, 356), fill: 'none', stroke: 'var(--viz-6)', strokeWidth: 20, strokeLinecap: 'round' })
+function EmptyView(props) {
+  var content = DS.EmptyState ? h(DS.EmptyState, {
+    title: props.title,
+    description: props.description,
+    compact: !!props.compact
+  }) : h('div', null, h('h2', null, props.title), props.description ? h('p', null, props.description) : null);
+  return h('div', { className: props.inline ? '' : 'page-state' }, content);
+}
+
+function ResourceToolbar(props) {
+  var time = props.resource.updatedAt ? props.resource.updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+  return h(React.Fragment, null,
+    props.resource.error && props.resource.data ? h('div', { className: 'refresh-error', role: 'status' },
+      h('span', null, 'Live refresh failed: ' + errorMessage(props.resource.error)),
+      h('button', { type: 'button', className: 'text-button', onClick: props.resource.retry }, 'Retry')
+    ) : null,
+    h('div', { className: 'resource-toolbar' },
+      h('span', { 'aria-hidden': 'true' }, props.resource.refreshing ? 'Refreshing\u2026' : (time ? 'Updated ' + time : '')),
+      h('span', { className: 'sr-only', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' }, props.resource.refreshing ? 'Refreshing live data' : '')
+    )
+  );
+}
+
+function RunTable(props) {
+  var rows = props.rows || [];
+  if (!rows.length) return h(EmptyView, { inline: true, compact: true, title: props.emptyTitle || 'No runs', description: props.emptyDescription });
+  return h('div', { className: 'data-table-wrap' },
+    h('table', { className: 'data-table', 'aria-label': props.label || 'Agent runs' },
+      h('caption', { className: 'sr-only' }, props.label || 'Agent runs'),
+      h('thead', null,
+        h('tr', null,
+          h('th', { scope: 'col' }, 'Run ID'),
+          h('th', { scope: 'col' }, 'Customer'),
+          h('th', { scope: 'col' }, 'Channel'),
+          h('th', { scope: 'col' }, 'Status'),
+          h('th', { scope: 'col' }, 'Duration'),
+          props.showTokens ? h('th', { scope: 'col' }, 'Tokens') : null,
+          h('th', { scope: 'col' }, 'Started')
+        )
+      ),
+      h('tbody', null, rows.map(function(run) {
+        return h('tr', { key: run.id },
+          h('td', null, h('a', { className: 'run-link', href: '#/runs/' + encodeURIComponent(run.id) }, run.id)),
+          h('td', null, run.customer_name || 'Unknown customer'),
+          h('td', null, channelLabel(run.channel)),
+          h('td', null, h(Badge, { tone: statusTone(run.status) }, statusLabel(run.status))),
+          h('td', { className: 'mono' }, formatDuration(run.duration_ms)),
+          props.showTokens ? h('td', { className: 'mono' }, formatNumber(run.total_tokens)) : null,
+          h('td', { className: 'mono' }, formatInstant(run.started_at, props.timezone, { dateStyle: 'short', timeStyle: 'short' }))
+        );
+      }))
+    )
+  );
+}
+
+// ── Screen: Dashboard ─────────────────────────────────────────────────────────
+
+function chartTone(key, index) {
+  var known = {
+    telegram: 'var(--viz-1)', demo: 'var(--viz-2)', web: 'var(--viz-3)', operator: 'var(--viz-5)',
+    completed: 'var(--viz-3)', escalated: 'var(--viz-4)', failed: 'var(--viz-6)',
+    budget_exhausted: 'var(--viz-5)', running: 'var(--viz-2)'
+  };
+  return known[key] || 'var(--viz-' + ((index % 6) + 1) + ')';
+}
+
+function BookingChart(props) {
+  var series = props.series || [];
+  if (!series.length) return h(EmptyView, { inline: true, compact: true, title: 'No bookings in this period' });
+  var grouped = {};
+  var channelSet = {};
+  series.forEach(function(point) {
+    if (!grouped[point.date]) grouped[point.date] = {};
+    grouped[point.date][point.channel] = Number(point.count) || 0;
+    channelSet[point.channel] = true;
+  });
+  var dates = Object.keys(grouped).sort();
+  var channels = Object.keys(channelSet).sort();
+  var totals = dates.map(function(date) {
+    return channels.reduce(function(sum, channel) { return sum + (grouped[date][channel] || 0); }, 0);
+  });
+  var max = Math.max.apply(Math, totals.concat([1]));
+  var width = 600, height = 170, baseline = 145, plotHeight = 120, left = 28;
+  var groupWidth = (width - left) / dates.length;
+  var barWidth = Math.max(1.5, groupWidth * .7);
+  var labelEvery = Math.max(1, Math.ceil(dates.length / 7));
+  var shapes = [];
+  dates.forEach(function(date, dateIndex) {
+    var stack = 0;
+    channels.forEach(function(channel, channelIndex) {
+      var count = grouped[date][channel] || 0;
+      if (!count) return;
+      var rectHeight = count / max * plotHeight;
+      var y = baseline - stack - rectHeight;
+      shapes.push(h('rect', {
+        key: date + channel, x: left + dateIndex * groupWidth + (groupWidth - barWidth) / 2,
+        y: y, width: barWidth, height: rectHeight, rx: 1, fill: chartTone(channel, channelIndex)
+      }, h('title', null, formatDateKey(date, { month: 'short', day: 'numeric' }) + ': ' + channelLabel(channel) + ' ' + count)));
+      stack += rectHeight;
+    });
+    if (dateIndex % labelEvery === 0 || dateIndex === dates.length - 1) {
+      shapes.push(h('text', {
+        key: date + '-label', x: left + dateIndex * groupWidth + groupWidth / 2, y: 162,
+        textAnchor: 'middle', fill: 'var(--text-tertiary)', fontSize: 9, fontFamily: 'var(--font-mono)'
+      }, formatDateKey(date, { month: 'numeric', day: 'numeric' })));
+    }
+  });
+  return h(React.Fragment, null,
+    h('svg', {
+      width: '100%', height: 170, viewBox: '0 0 600 170', role: 'img',
+      'aria-label': 'Bookings by date and channel. ' + formatNumber(totals.reduce(function(a, b) { return a + b; }, 0)) + ' total bookings.'
+    },
+      h('line', { x1: left, x2: width, y1: baseline, y2: baseline, stroke: 'var(--border-subtle)' }),
+      shapes
+    ),
+    h('div', { className: 'chart-legend' }, channels.map(function(channel, index) {
+      return h('span', { key: channel, className: 'legend-item' },
+        h('span', { className: 'legend-dot', style: { background: chartTone(channel, index) }, 'aria-hidden': 'true' }),
+        channelLabel(channel)
+      );
+    }))
+  );
+}
+
+function OutcomeChart(props) {
+  var outcomes = (props.outcomes || []).filter(function(item) { return Number(item.count) > 0; });
+  var total = outcomes.reduce(function(sum, item) { return sum + Number(item.count); }, 0);
+  if (!total) return h(EmptyView, { inline: true, compact: true, title: 'No runs in this period' });
+  var radius = 54, circumference = 2 * Math.PI * radius, offset = 0;
+  var circles = outcomes.map(function(item, index) {
+    var length = Number(item.count) / total * circumference;
+    var circle = h('circle', {
+      key: item.status, cx: 80, cy: 80, r: radius, fill: 'none', stroke: chartTone(item.status, index),
+      strokeWidth: 18, strokeDasharray: length + ' ' + (circumference - length), strokeDashoffset: -offset,
+      transform: 'rotate(-90 80 80)'
+    }, h('title', null, statusLabel(item.status) + ': ' + item.count));
+    offset += length;
+    return circle;
+  });
+  return h(React.Fragment, null,
+    h('svg', {
+      width: 160, height: 160, viewBox: '0 0 160 160', role: 'img',
+      'aria-label': 'Run outcomes. ' + outcomes.map(function(item) { return statusLabel(item.status) + ' ' + item.count; }).join(', ') + '.',
+      style: { display: 'block', margin: '0 auto' }
+    },
+      h('circle', { cx: 80, cy: 80, r: radius, fill: 'none', stroke: 'var(--surface-3)', strokeWidth: 18 }),
+      circles,
+      h('text', { x: 80, y: 85, textAnchor: 'middle', fill: 'var(--text-primary)', fontSize: 20, fontFamily: 'var(--font-mono)' }, formatNumber(total))
+    ),
+    h('div', { className: 'chart-legend', style: { justifyContent: 'center', flexWrap: 'wrap' } },
+      outcomes.map(function(item, index) {
+        return h('span', { key: item.status, className: 'legend-item' },
+          h('span', { className: 'legend-dot', style: { background: chartTone(item.status, index) }, 'aria-hidden': 'true' }),
+          statusLabel(item.status) + ' ' + formatNumber(item.count)
+        );
+      })
+    )
+  );
+}
+
+function AttentionList(props) {
+  var items = props.items || [];
+  return h('div', { className: 'attention-panel' },
+    h('div', { className: 'attention-title' }, 'Needs attention'),
+    items.length ? items.map(function(item) {
+      var isError = item.kind === 'failed_run';
+      return h('div', { key: item.kind + ':' + item.id, className: 'attention-item' },
+        h('div', { className: 'attention-dot ' + (isError ? 'error' : 'warning'), 'aria-hidden': 'true' }),
+        h('div', { className: 'attention-body' },
+          h('div', { className: 'attention-item-title' }, item.title),
+          item.summary ? h('div', { className: 'attention-ref' }, item.summary) : null,
+          h('div', { className: 'attention-ref' }, formatInstant(item.created_at, props.timezone))
+        ),
+        item.run_id ? h('a', { className: 'attention-action', href: '#/runs/' + encodeURIComponent(item.run_id) }, 'Review') : null
+      );
+    }) : h(EmptyView, { inline: true, compact: true, title: 'Nothing needs attention' })
+  );
+}
+
+function DashboardScreen(props) {
+  var resource = usePollingResource(
+    'dashboard:' + props.range,
+    function(signal) { return fetchJSON('/dashboard?range=' + encodeURIComponent(props.range), signal); },
+    10000,
+    true
+  );
+  if (resource.loading) return h(LoadingState, { label: 'Loading dashboard' });
+  if (resource.error && !resource.data) return h(ErrorView, { error: resource.error, onRetry: resource.retry, title: 'Could not load the dashboard' });
+
+  var data = resource.data;
+  var values = data.kpis || {};
+  var kpis = [
+    { label: 'Bookings today', value: formatNumber(values.bookings_today) },
+    { label: 'Total runs', value: formatNumber(values.total_runs) },
+    { label: 'Success rate', value: formatPercent(values.success_rate) },
+    { label: 'Median latency', value: formatDuration(values.median_latency_ms) },
+    { label: 'Open escalations', value: formatNumber(values.open_escalations) },
+    { label: 'Total tokens', value: formatNumber(values.total_tokens) }
   ];
+
+  return h('section', { 'aria-busy': resource.refreshing ? 'true' : 'false' },
+    h('h1', { className: 'sr-only' }, 'Dashboard'),
+    h(ResourceToolbar, { resource: resource }),
+    h('div', { className: 'kpi-grid' }, kpis.map(function(kpi) {
+      return h('div', { key: kpi.label, className: 'kpi-card' },
+        h('div', { className: 'kpi-label' }, kpi.label),
+        h('div', { className: 'kpi-value' }, kpi.value)
+      );
+    })),
+    h('div', { className: 'charts-row' },
+      h('div', { className: 'chart-card' },
+        h('div', { className: 'chart-title' }, 'Bookings created'),
+        h('div', { className: 'chart-subtitle' }, 'Last ' + data.period_days + ' days \u00b7 by channel'),
+        h(BookingChart, { series: data.booking_series })
+      ),
+      h('div', { className: 'chart-card' },
+        h('div', { className: 'chart-title' }, 'Run outcomes'),
+        h(OutcomeChart, { outcomes: data.run_outcomes })
+      )
+    ),
+    h('div', { className: 'bottom-row' },
+      h(RunTable, { rows: data.recent_runs, timezone: props.timezone, label: 'Recent agent runs', emptyTitle: 'No runs in this period' }),
+      h(AttentionList, { items: data.attention, timezone: props.timezone })
+    )
+  );
 }
 
 // ── Screen: Runs ──────────────────────────────────────────────────────────────
 
-function RunsScreen() {
-  return h('div', null,
-    h('div', { className: 'data-table-wrap' },
-      h('table', { className: 'data-table' },
-        h('thead', null,
-          h('tr', null,
-            h('th', { scope: 'col' }, 'Run ID'),
-            h('th', { scope: 'col' }, 'Customer'),
-            h('th', { scope: 'col' }, 'Channel'),
-            h('th', { scope: 'col' }, 'Outcome'),
-            h('th', { scope: 'col' }, 'Duration'),
-            h('th', { scope: 'col' }, 'Tokens'),
-            h('th', { scope: 'col' }, 'Time')
-          )
-        ),
-        h('tbody', null,
-          RUNS.map(function(r) {
-            return h('tr', { key: r.id, role: 'button', tabIndex: 0, onClick: function() { window.location.hash = '#/trace'; }, onKeyDown: function(e) { if (e.key === 'Enter') window.location.hash = '#/trace'; } },
-              h('td', { className: 'mono accent' }, r.id),
-              h('td', null, r.customer),
-              h('td', null, r.channel),
-              h('td', null, h(Badge, { tone: outcomeTone(r.outcome) }, r.outcome)),
-              h('td', { className: 'mono' }, r.duration),
-              h('td', { className: 'mono' }, r.tokens.toLocaleString()),
-              h('td', { className: 'mono' }, r.time)
-            );
+function RunsScreen(props) {
+  var draftPair = React.useState('');
+  var draft = draftPair[0];
+  var setDraft = draftPair[1];
+  var queryPair = React.useState('');
+  var query = queryPair[0];
+  var setQuery = queryPair[1];
+  var statusPair = React.useState('');
+  var status = statusPair[0];
+  var setStatus = statusPair[1];
+  var channelPair = React.useState('');
+  var channel = channelPair[0];
+  var setChannel = channelPair[1];
+  var cursorPair = React.useState('');
+  var cursor = cursorPair[0];
+  var setCursor = cursorPair[1];
+  var historyPair = React.useState([]);
+  var cursorHistory = historyPair[0];
+  var setCursorHistory = historyPair[1];
+
+  function resetPage() {
+    setCursor('');
+    setCursorHistory([]);
+  }
+
+  var params = new URLSearchParams();
+  params.set('limit', '50');
+  if (status) params.set('status', status);
+  if (channel) params.set('channel', channel);
+  if (query) params.set('q', query);
+  if (cursor) params.set('cursor', cursor);
+  var requestPath = '/runs?' + params.toString();
+  var resource = usePollingResource(
+    'runs:' + params.toString(),
+    function(signal) { return fetchJSON(requestPath, signal); },
+    10000,
+    true
+  );
+
+  function submitSearch(event) {
+    event.preventDefault();
+    setQuery(draft.trim());
+    resetPage();
+  }
+
+  function previousPage() {
+    if (!cursorHistory.length) return;
+    var previous = cursorHistory[cursorHistory.length - 1];
+    setCursorHistory(cursorHistory.slice(0, -1));
+    setCursor(previous);
+  }
+
+  function nextPage() {
+    if (!resource.data || !resource.data.next_cursor) return;
+    setCursorHistory(cursorHistory.concat([cursor]));
+    setCursor(resource.data.next_cursor);
+  }
+
+  return h('section', { 'aria-busy': resource.loading || resource.refreshing ? 'true' : 'false' },
+    h('h1', { className: 'sr-only' }, 'Agent runs'),
+    h('form', { className: 'filter-bar', onSubmit: submitSearch, role: 'search' },
+      h('div', { className: 'field' },
+        h('label', { htmlFor: 'runs-query' }, 'Run ID or customer'),
+        h('input', { id: 'runs-query', type: 'search', value: draft, onChange: function(event) { setDraft(event.target.value); }, placeholder: 'Search runs' })
+      ),
+      h('div', { className: 'field' },
+        h('label', { htmlFor: 'runs-status' }, 'Status'),
+        h('select', { id: 'runs-status', value: status, onChange: function(event) { setStatus(event.target.value); resetPage(); } },
+          h('option', { value: '' }, 'All statuses'),
+          ['running', 'completed', 'escalated', 'failed', 'budget_exhausted'].map(function(value) {
+            return h('option', { key: value, value: value }, statusLabel(value));
           })
         )
+      ),
+      h('div', { className: 'field' },
+        h('label', { htmlFor: 'runs-channel' }, 'Channel'),
+        h('select', { id: 'runs-channel', value: channel, onChange: function(event) { setChannel(event.target.value); resetPage(); } },
+          h('option', { value: '' }, 'All channels'),
+          ['telegram', 'demo', 'web'].map(function(value) {
+            return h('option', { key: value, value: value }, channelLabel(value));
+          })
+        )
+      ),
+      h('button', { type: 'submit', className: 'secondary-button' }, 'Search')
+    ),
+    resource.loading ? h(LoadingState, { label: 'Loading runs' }) : null,
+    resource.error && !resource.data ? h(ErrorView, { error: resource.error, onRetry: resource.retry, title: 'Could not load runs' }) : null,
+    resource.data ? h(React.Fragment, null,
+      h(ResourceToolbar, { resource: resource }),
+      h(RunTable, {
+        rows: resource.data.items, timezone: props.timezone, showTokens: true,
+        label: 'Filtered agent runs', emptyTitle: 'No runs match', emptyDescription: 'Adjust the status, channel, or search query.'
+      }),
+      h('div', { className: 'pagination', 'aria-label': 'Runs pagination' },
+        h('button', { type: 'button', className: 'secondary-button', disabled: !cursorHistory.length, onClick: previousPage }, 'Previous'),
+        h('button', { type: 'button', className: 'secondary-button', disabled: !resource.data.next_cursor, onClick: nextPage }, 'Next')
       )
-    )
+    ) : null
   );
 }
 
 // ── Screen: Trace ─────────────────────────────────────────────────────────────
 
-function TraceScreen() {
-  return h('div', null,
-    // Summary
+function initials(name) {
+  return String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map(function(part) { return part.charAt(0); }).join('').toUpperCase() || '?';
+}
+
+function timelineState(status, attempts) {
+  if (attempts && attempts.length > 1) return 'retried';
+  if (status === 'completed' || status === 'succeeded' || status === 'success') return 'success';
+  if (status === 'failed' || status === 'budget_exhausted' || status === 'refused') return 'failed';
+  if (status === 'running') return 'running';
+  return 'pending';
+}
+
+function buildTimeline(run, timezone) {
+  var iterations = (run.iterations || []).slice().sort(function(a, b) { return a.iteration - b.iteration; });
+  var tools = (run.tools || []).slice().sort(function(a, b) {
+    return a.iteration - b.iteration || a.call_index - b.call_index;
+  });
+  var result = [];
+  iterations.forEach(function(iteration) {
+    result.push({
+      id: 'iteration:' + iteration.iteration,
+      marker: 'I' + iteration.iteration + ' \u00b7 ' + formatTime(iteration.started_at, timezone),
+      title: 'Model iteration ' + iteration.iteration,
+      state: timelineState(iteration.status),
+      status: iteration.status,
+      duration: formatDuration(iteration.duration_ms),
+      tokens: (Number(iteration.prompt_tokens) || 0) + (Number(iteration.completion_tokens) || 0),
+      detail: iteration.error_message || (iteration.finish_reason ? 'Finish reason: ' + iteration.finish_reason : ''),
+      payload: null,
+      attempts: []
+    });
+    tools.filter(function(tool) { return tool.iteration === iteration.iteration; }).forEach(function(tool) {
+      var attempts = tool.attempts || [];
+      result.push({
+        id: 'tool:' + tool.id,
+        marker: 'I' + tool.iteration + ' \u00b7 ' + (tool.started_at ? formatTime(tool.started_at, timezone) : tool.call_index + '/' + tool.call_count),
+        title: tool.name,
+        state: timelineState(tool.status, attempts),
+        status: tool.status,
+        duration: formatDuration(tool.duration_ms),
+        tokens: null,
+        detail: tool.contract_version ? 'Contract ' + tool.contract_version : '',
+        payload: { arguments: tool.arguments, result: tool.result },
+        attempts: attempts
+      });
+    });
+  });
+  tools.filter(function(tool) {
+    return !iterations.some(function(iteration) { return iteration.iteration === tool.iteration; });
+  }).forEach(function(tool) {
+    result.push({
+      id: 'tool:' + tool.id, marker: 'I' + tool.iteration + (tool.started_at ? ' \u00b7 ' + formatTime(tool.started_at, timezone) : ''), title: tool.name,
+      state: timelineState(tool.status, tool.attempts), status: tool.status,
+      duration: formatDuration(tool.duration_ms), tokens: null,
+      payload: { arguments: tool.arguments, result: tool.result }, attempts: tool.attempts || []
+    });
+  });
+  return result;
+}
+
+function TimelineView(props) {
+  var steps = props.steps || [];
+  if (!steps.length) return h(EmptyView, { inline: true, compact: true, title: 'No trace yet', description: 'This run has not produced any model or tool steps.' });
+  return h('div', { className: 'timeline', role: 'list', 'aria-label': 'Agent execution timeline' },
+    steps.map(function(step) {
+      var payload = safeJSON(step.payload);
+      return h('div', { key: step.id, className: 'timeline-step', role: 'listitem' },
+        h('div', { className: 'timeline-dot ' + step.state, 'aria-hidden': 'true' }),
+        h('div', { className: 'step-header' },
+          h('span', { className: 'step-time' }, step.marker),
+          h('span', { className: 'step-title' }, step.title),
+          h('span', { className: 'timeline-state' }, statusLabel(step.status))
+        ),
+        h('div', { className: 'step-meta' },
+          h('span', { className: 'step-duration' }, step.duration),
+          step.tokens !== null ? h('span', { className: 'step-tokens' }, formatNumber(step.tokens) + ' tok') : null
+        ),
+        step.detail ? h('div', { style: { fontSize: 'var(--fs-caption)', color: 'var(--text-tertiary)', marginTop: 'var(--space-1)' } }, step.detail) : null,
+        payload ? h('details', { className: 'json-details' },
+          h('summary', null, 'View payload'),
+          h('pre', null, payload)
+        ) : null,
+        step.attempts.map(function(attempt) {
+          var attemptPayload = safeJSON(attempt.result);
+          return h('div', { key: attempt.attempt_no, className: 'step-retry' },
+            h('div', { className: 'step-retry-label' }, 'Attempt ' + attempt.attempt_no + ' \u2014 ' + statusLabel(attempt.status)),
+            attempt.error_message ? h('div', { style: { fontSize: 'var(--fs-caption)', color: 'var(--status-error-fg)' } },
+              (attempt.error_code ? attempt.error_code + ': ' : '') + attempt.error_message
+            ) : null,
+            h('div', { className: 'step-duration' }, formatDuration(attempt.duration_ms) + (attempt.started_at ? ' \u00b7 ' + formatTime(attempt.started_at, props.timezone) : '')),
+            attemptPayload ? h('details', { className: 'json-details' }, h('summary', null, 'View result'), h('pre', null, attemptPayload)) : null
+          );
+        })
+      );
+    })
+  );
+}
+
+function TraceScreen(props) {
+  var path = '/runs/' + encodeURIComponent(props.runID);
+  var resource = usePollingResource(
+    'trace:' + props.runID,
+    function(signal) { return fetchJSON(path, signal); },
+    function(data) { return data && data.run && data.run.status === 'running' ? 2000 : 0; },
+    !!props.runID
+  );
+  if (!props.runID) return h(ErrorView, { error: new Error('The route does not include a run ID.'), onRetry: function() { window.location.hash = '#/runs'; } });
+  if (resource.loading) return h(LoadingState, { label: 'Loading agent trace' });
+  if (resource.error && !resource.data) return h(ErrorView, { error: resource.error, onRetry: resource.retry, title: 'Could not load this run' });
+
+  var detail = resource.data;
+  var run = detail.run;
+  var bookings = detail.bookings || [];
+  var firstBooking = bookings[0] || null;
+  var steps = buildTimeline(run, props.timezone);
+  var totalTokens = (Number(run.prompt_tokens) || 0) + (Number(run.completion_tokens) || 0);
+  return h('section', { 'aria-busy': resource.refreshing ? 'true' : 'false' },
+    h('h1', { className: 'sr-only' }, 'Agent trace ' + run.id),
+    h('div', { className: 'resource-toolbar', style: { justifyContent: 'space-between' } },
+      h('a', { className: 'run-link', href: '#/runs' }, '\u2190 All runs'),
+      h('span', null, run.status === 'running' ? 'Live \u00b7 refreshes every 2 seconds' : '')
+    ),
+    h(ResourceToolbar, { resource: resource }),
+    detail.escalation ? h('div', { className: 'escalation-card', role: 'status' },
+      h('strong', null, 'Escalation: ' + detail.escalation.reason_code),
+      detail.escalation.summary ? h('div', null, detail.escalation.summary) : null,
+      h('div', { className: 'attention-ref' }, statusLabel(detail.escalation.status) + ' \u00b7 ' + formatInstant(detail.escalation.created_at, props.timezone))
+    ) : null,
     h('div', { className: 'trace-summary' },
+      [['Run ID', run.id], ['Duration', formatDuration(run.duration_ms)], ['Tokens', formatNumber(totalTokens)], ['Steps', formatNumber(steps.length)]].map(function(item) {
+        return h('div', { key: item[0], className: 'trace-summary-item' },
+          h('div', { className: 'trace-summary-label' }, item[0]),
+          h('div', { className: 'trace-summary-value' }, item[1])
+        );
+      }),
       h('div', { className: 'trace-summary-item' },
-        h('div', { className: 'trace-summary-label' }, 'Run ID'),
-        h('div', { className: 'trace-summary-value' }, 'run_7f3a9c21')
-      ),
-      h('div', { className: 'trace-summary-item' },
-        h('div', { className: 'trace-summary-label' }, 'Duration'),
-        h('div', { className: 'trace-summary-value' }, '2.94s')
-      ),
-      h('div', { className: 'trace-summary-item' },
-        h('div', { className: 'trace-summary-label' }, 'Tokens'),
-        h('div', { className: 'trace-summary-value' }, '3,847')
-      ),
-      h('div', { className: 'trace-summary-item' },
-        h('div', { className: 'trace-summary-label' }, 'Steps'),
-        h('div', { className: 'trace-summary-value' }, '7')
-      ),
-      h('div', { className: 'trace-summary-item' },
-        h('div', { className: 'trace-summary-label' }, 'Outcome'),
-        h(Badge, { tone: 'success' }, 'success')
+        h('div', { className: 'trace-summary-label' }, 'Status'),
+        h(Badge, { tone: statusTone(run.status) }, statusLabel(run.status))
       )
     ),
-    // Key-Value block
     h('div', { className: 'kv-block' },
-      h('div', { className: 'kv-row' },
-        h('span', { className: 'kv-label' }, 'Customer'),
-        h('span', { className: 'kv-value' }, 'Marta Lindqvist')
-      ),
-      h('div', { className: 'kv-row' },
-        h('span', { className: 'kv-label' }, 'Channel'),
-        h('span', { className: 'kv-value' }, 'Telegram')
-      ),
-      h('div', { className: 'kv-row' },
-        h('span', { className: 'kv-label' }, 'Service'),
-        h('span', { className: 'kv-value' }, 'Haircut')
-      ),
-      h('div', { className: 'kv-row' },
-        h('span', { className: 'kv-label' }, 'Staff'),
-        h('span', { className: 'kv-value' }, 'Alex Rivera')
-      ),
-      h('div', { className: 'kv-row' },
-        h('span', { className: 'kv-label' }, 'Booking ID'),
-        h('span', { className: 'kv-value mono' }, 'bk_8d4f2a91e7c3')
-      )
+      [
+        ['Customer', detail.customer && detail.customer.display_name || 'Unknown customer', false],
+        ['Channel', channelLabel(detail.channel), false],
+        ['Conversation', statusLabel(detail.conversation_status), false],
+        ['Provider / model', (run.provider || '\u2014') + ' / ' + (run.model || '\u2014'), true],
+        ['Started', formatInstant(run.started_at, props.timezone), true],
+        ['Service', firstBooking ? firstBooking.service_name : '\u2014', false],
+        ['Staff', firstBooking ? firstBooking.staff_name : '\u2014', false],
+        ['Booking', firstBooking ? firstBooking.id : '\u2014', true]
+      ].map(function(item) {
+        return h('div', { key: item[0], className: 'kv-row' },
+          h('span', { className: 'kv-label' }, item[0]),
+          h('span', { className: 'kv-value' + (item[2] ? ' mono' : '') }, item[1])
+        );
+      })
     ),
-    // Two-pane layout
+    run.error_message ? h('div', { className: 'refresh-error', role: 'alert' }, run.error_code ? run.error_code + ': ' + run.error_message : run.error_message) : null,
+    detail.messages_truncated ? h('div', { className: 'refresh-error', role: 'status' }, 'Only the most recent conversation messages are shown for this run.') : null,
     h('div', { className: 'trace-layout' },
-      // LEFT: Conversation
-      h('div', { className: 'conversation' },
-        MESSAGES.map(function(msg, i) {
-          return h('div', { key: i, className: 'msg' },
-            h('div', { className: 'msg-avatar ' + msg.from }, msg.from === 'user' ? 'ML' : 'AI'),
+      h('section', { className: 'conversation', 'aria-label': 'Conversation messages' },
+        (detail.messages || []).length ? detail.messages.map(function(message) {
+          var from = message.role === 'user' ? 'user' : 'agent';
+          return h('article', { key: message.id, className: 'msg' },
+            h('div', { className: 'msg-avatar ' + from, 'aria-hidden': 'true' }, from === 'user' ? initials(detail.customer && detail.customer.display_name) : 'AI'),
             h('div', null,
-              h('div', { className: 'msg-bubble ' + msg.from }, msg.text),
-              h('div', { className: 'msg-time' }, msg.time)
+              h('div', { className: 'sr-only' }, statusLabel(message.role) + ' message'),
+              h('div', { className: 'msg-bubble ' + from },
+                message.content,
+                message.id === run.trigger_message_id ? h('span', { className: 'sr-only' }, ' This message triggered the run.') : null
+              ),
+              h('div', { className: 'msg-time' }, formatInstant(message.created_at, props.timezone))
             )
           );
-        })
+        }) : h('div', { className: 'message-empty' }, 'No conversation messages were recorded.')
       ),
-      // RIGHT: Timeline
-      h('div', { className: 'timeline', role: 'list', 'aria-label': 'Agent execution timeline' },
-        TRACE_STEPS.map(function(step) {
-          return h('div', { key: step.id, className: 'timeline-step', role: 'listitem' },
-            h('div', { className: 'timeline-dot ' + step.state }),
-            h('div', { className: 'step-header' },
-              h('span', { className: 'step-time' }, step.t),
-              h('span', { className: 'step-title' }, step.title)
-            ),
-            h('div', { className: 'step-meta' },
-              h('span', { className: 'step-duration' }, step.duration),
-              h('span', { className: 'step-tokens' }, step.tokens + ' tok')
-            ),
-            step.retries ? step.retries.map(function(r, ri) {
-              return h('div', { key: ri, className: 'step-retry' },
-                h('div', { className: 'step-retry-label' }, 'Attempt ' + r.attempt + ' \u2014 ' + r.state),
-                h('div', { style: { fontSize: 'var(--fs-caption)', color: 'var(--text-tertiary)' } }, r.detail),
-                h('div', { className: 'step-duration' }, r.duration)
-              );
-            }) : null
-          );
-        })
-      )
+      h('section', { 'aria-label': 'Execution details' }, h(TimelineView, { steps: steps, timezone: props.timezone }))
     )
   );
 }
 
 // ── Screen: Calendar ──────────────────────────────────────────────────────────
 
-function CalendarScreen() {
-  var staffNames = Object.keys(CALENDAR_BOOKINGS);
-
-  return h('div', null,
-    h('div', { className: 'calendar-header' },
-      h('button', { className: 'calendar-nav', 'aria-label': 'Previous week', tabIndex: 0 }, h(Icon, { name: 'chevronLeft' })),
-      h('h2', null, 'Week of Jul 21, 2026'),
-      h('button', { className: 'calendar-nav', 'aria-label': 'Next week', tabIndex: 0 }, h(Icon, { name: 'chevronRight' }))
-    ),
-    h('div', { className: 'calendar-grid', role: 'grid', 'aria-label': 'Weekly calendar' },
-      // Header row
-      h('div', { className: 'cal-header-cell' }),
-      DAYS.map(function(day, i) {
-        return h('div', { key: day, className: 'cal-header-cell' }, day + ' ' + DATES[i]);
-      }),
-      // Staff rows
-      staffNames.map(function(staff) {
-        var cells = [];
-        cells.push(h('div', { key: staff + '-name', className: 'cal-staff-cell' }, staff));
-        DAYS.forEach(function(day, di) {
-          var bookings = CALENDAR_BOOKINGS[staff][day] || [];
-          var isThursday = day === 'Thu';
-          cells.push(h('div', { key: staff + '-' + day, className: 'cal-day-cell' },
-            bookings.map(function(bk, bi) {
-              return h('div', { key: bi, className: 'cal-booking' },
-                h('div', { className: 'cal-booking-name' }, bk.name),
-                h('div', { className: 'cal-booking-time' }, bk.time)
-              );
-            }),
-            // Current-time indicator on Thursday
-            isThursday && staff === 'Alex Rivera' ? h('div', { className: 'cal-now-line' }) : null
-          ));
-        });
-        return cells;
-      })
-    )
-  );
+function bookingBorder(status) {
+  if (status === 'cancelled' || status === 'no_show') return 'var(--status-error-fg)';
+  if (status === 'confirmed' || status === 'checked_in' || status === 'completed') return 'var(--status-success-fg)';
+  return 'var(--accent)';
 }
 
-// ── Screen: Settings (placeholder) ───────────────────────────────────────────
+function CalendarScreen(props) {
+  var initialWeek = startOfWeek(dateKeyInTimezone(new Date(), props.timezone));
+  var weekPair = React.useState(initialWeek);
+  var weekStart = weekPair[0];
+  var setWeekStart = weekPair[1];
+  var weekEnd = addDays(weekStart, 7);
+  var requestPath = '/calendar?from=' + encodeURIComponent(weekStart) + '&to=' + encodeURIComponent(weekEnd);
+  var resource = usePollingResource(
+    'calendar:' + weekStart,
+    function(signal) { return fetchJSON(requestPath, signal); },
+    10000,
+    true
+  );
+  if (resource.loading) return h(LoadingState, { label: 'Loading calendar' });
+  if (resource.error && !resource.data) return h(ErrorView, { error: resource.error, onRetry: resource.retry, title: 'Could not load the calendar' });
 
-function SettingsScreen() {
-  return h('div', { style: { padding: 'var(--space-8)', textAlign: 'center', color: 'var(--text-tertiary)' } },
-    h('div', { style: { fontSize: 'var(--fs-h2)', fontWeight: 'var(--fw-semibold)', color: 'var(--text-primary)', marginBottom: 'var(--space-3)' } }, 'Settings'),
-    h('p', null, 'Workspace and agent configuration will appear here.')
+  var data = resource.data;
+  var timezone = data.timezone || props.timezone;
+  var days = Array.from({ length: 7 }, function(_, index) { return addDays(weekStart, index); });
+  var bookings = data.bookings || [];
+  var blocks = data.blocks || [];
+  var hasEvents = bookings.length > 0 || blocks.length > 0;
+
+  function cellBookings(staffID, day) {
+    return bookings.filter(function(booking) {
+      return booking.staff_id === staffID && dateKeyInTimezone(booking.starts_at, timezone) === day;
+    });
+  }
+
+  function cellBlocks(staffID, day) {
+    return blocks.filter(function(block) {
+      return block.staff_id === staffID && dateKeyInTimezone(block.starts_at, timezone) === day;
+    });
+  }
+
+  return h('section', { 'aria-busy': resource.refreshing ? 'true' : 'false' },
+    h('h1', { className: 'sr-only' }, 'Week calendar'),
+    h(ResourceToolbar, { resource: resource }),
+    h('div', { className: 'calendar-header' },
+      h('button', { type: 'button', className: 'calendar-nav', 'aria-label': 'Previous week', onClick: function() { setWeekStart(addDays(weekStart, -7)); } }, h(Icon, { name: 'chevronLeft' })),
+      h('h2', { 'aria-live': 'polite' }, formatDateKey(weekStart, { month: 'short', day: 'numeric', year: 'numeric' }) + ' \u2013 ' + formatDateKey(addDays(weekStart, 6), { month: 'short', day: 'numeric', year: 'numeric' })),
+      h('button', { type: 'button', className: 'calendar-nav', 'aria-label': 'Next week', onClick: function() { setWeekStart(addDays(weekStart, 7)); } }, h(Icon, { name: 'chevronRight' }))
+    ),
+    !data.staff.length ? h(EmptyView, { title: 'No active staff', description: 'The calendar will appear when an active staff member is configured.' }) : h(React.Fragment, null,
+      !hasEvents ? h(EmptyView, { inline: true, compact: true, title: 'No bookings this week', description: 'The schedule is currently clear.' }) : null,
+      h('div', { className: 'calendar-scroll', tabIndex: 0, 'aria-label': 'Scrollable weekly calendar' },
+        h('div', { className: 'calendar-grid', role: 'grid', 'aria-label': 'Bookings from ' + weekStart + ' through ' + addDays(weekStart, 6) },
+          h('div', { className: 'calendar-row', role: 'row' },
+            h('div', { className: 'cal-header-cell', role: 'columnheader' }, 'Staff'),
+            days.map(function(day) {
+              return h('div', { key: day, className: 'cal-header-cell', role: 'columnheader' }, formatDateKey(day, { weekday: 'short', month: 'short', day: 'numeric' }));
+            })
+          ),
+          data.staff.map(function(staff) {
+            return h('div', { key: staff.id, className: 'calendar-row', role: 'row' },
+              h('div', { className: 'cal-staff-cell', role: 'rowheader' }, staff.display_name),
+              days.map(function(day) {
+                var dayBookings = cellBookings(staff.id, day);
+                var dayBlocks = cellBlocks(staff.id, day);
+                return h('div', { key: day, className: 'cal-day-cell', role: 'gridcell', 'aria-label': staff.display_name + ', ' + formatDateKey(day, { weekday: 'long', month: 'long', day: 'numeric' }) },
+                  dayBookings.map(function(booking) {
+                    var time = formatTime(booking.starts_at, timezone) + '\u2013' + formatTime(booking.ends_at, timezone);
+                    return h('details', { key: booking.id, className: 'cal-booking', style: { borderLeftColor: bookingBorder(booking.status) } },
+                      h('summary', { 'aria-label': booking.customer_name + ', ' + booking.service_name + ', ' + time + ', ' + statusLabel(booking.status) },
+                        h('span', { className: 'cal-booking-name' }, booking.customer_name),
+                        h('span', { className: 'cal-booking-time' }, time)
+                      ),
+                      h('div', { className: 'cal-booking-detail' },
+                        h('div', null, booking.service_name),
+                        h('div', null, statusLabel(booking.status)),
+                        h('div', { className: 'mono' }, 'v' + booking.schedule_version)
+                      )
+                    );
+                  }),
+                  dayBlocks.map(function(block) {
+                    return h('div', { key: block.id, className: 'cal-block' },
+                      statusLabel(block.kind) + ' \u00b7 ' + formatTime(block.starts_at, timezone) + '\u2013' + formatTime(block.ends_at, timezone),
+                      block.note ? h('div', null, block.note) : null
+                    );
+                  })
+                );
+              })
+            );
+          })
+        )
+      ),
+      h('div', { className: 'resource-toolbar' }, 'Times shown in ' + timezone)
+    )
   );
 }
 
@@ -662,18 +1240,32 @@ function SettingsScreen() {
 
 function getRoute() {
   var hash = window.location.hash || '#/';
-  if (hash === '#/' || hash === '#/dashboard') return 'dashboard';
-  if (hash === '#/runs') return 'runs';
-  if (hash.indexOf('#/trace') === 0) return 'trace';
-  if (hash === '#/calendar') return 'calendar';
-  if (hash === '#/settings') return 'settings';
-  return 'dashboard';
+  if (hash === '#/' || hash === '#/dashboard') return { name: 'dashboard', id: '' };
+  if (hash === '#/runs' || hash === '#/runs/') return { name: 'runs', id: '' };
+  var match = hash.match(/^#\/runs\/([^/?#]+)$/);
+  if (match) {
+    try { return { name: 'trace', id: decodeURIComponent(match[1]) }; }
+    catch (_) { return { name: 'trace', id: '' }; }
+  }
+  if (hash === '#/calendar') return { name: 'calendar', id: '' };
+  return { name: 'dashboard', id: '' };
 }
 
 function App() {
+  var tokenPair = React.useState(storedToken());
+  var token = tokenPair[0];
+  var setToken = tokenPair[1];
   var routeState = React.useState(getRoute());
   var route = routeState[0];
   var setRoute = routeState[1];
+  var rangePair = React.useState('7d');
+  var range = rangePair[0];
+  var setRange = rangePair[1];
+
+  function logout() {
+    saveToken('');
+    setToken('');
+  }
 
   React.useEffect(function() {
     function onHash() { setRoute(getRoute()); }
@@ -681,20 +1273,58 @@ function App() {
     return function() { window.removeEventListener('hashchange', onHash); };
   }, []);
 
-  var screen;
-  switch (route) {
-    case 'runs': screen = h(RunsScreen); break;
-    case 'trace': screen = h(TraceScreen); break;
-    case 'calendar': screen = h(CalendarScreen); break;
-    case 'settings': screen = h(SettingsScreen); break;
-    default: screen = h(DashboardScreen);
+  React.useEffect(function() {
+    window.addEventListener('kontor:operator-unauthorized', logout);
+    return function() { window.removeEventListener('kontor:operator-unauthorized', logout); };
+  }, []);
+
+  React.useEffect(function() {
+    var titles = { dashboard: 'Dashboard', runs: 'Runs', trace: 'Agent Trace', calendar: 'Calendar' };
+    document.title = (token ? (titles[route.name] || 'Operator') : 'Operator access') + ' \u00b7 Kontor';
+    var main = document.getElementById('operator-main');
+    if (main) main.focus();
+  }, [token, route.name, route.id]);
+
+  var sessionResource = usePollingResource(
+    'operator-session',
+    function(signal) { return fetchJSON('/session', signal); },
+    0,
+    !!token
+  );
+
+  if (!token) return h(AuthGate, { onAuthenticated: function(value) { setToken(value); } });
+  if (sessionResource.error && !sessionResource.data) {
+    return h('main', { className: 'auth-shell' },
+      h('div', null,
+        h(ErrorView, { error: sessionResource.error, onRetry: sessionResource.retry, title: 'Could not start the operator session' }),
+        h('div', { style: { textAlign: 'center', marginTop: 'var(--space-3)' } },
+          h('button', { type: 'button', className: 'text-button', onClick: logout }, 'Use another token')
+        )
+      )
+    );
+  }
+  if (sessionResource.loading || !sessionResource.data) {
+    return h('main', { className: 'auth-shell' }, h(LoadingState, { label: 'Loading operator session' }));
   }
 
+  var session = sessionResource.data;
+
+  var screen;
+  switch (route.name) {
+    case 'runs': screen = h(RunsScreen, { timezone: session.timezone }); break;
+    case 'trace': screen = h(TraceScreen, { runID: route.id, timezone: session.timezone }); break;
+    case 'calendar': screen = h(CalendarScreen, { timezone: session.timezone }); break;
+    default: screen = h(DashboardScreen, { range: range, timezone: session.timezone });
+  }
+
+  var currentNav = route.name === 'trace' ? 'runs' : route.name;
+
   return h('div', { className: 'app-shell' },
-    h(Sidebar, { current: route }),
+    h(Sidebar, { current: currentNav, session: session }),
     h('div', { className: 'main-area' },
-      h(Topbar, { current: route }),
-      h('main', { className: 'content', role: 'main' }, screen)
+      h(Topbar, { current: route.name, session: session, range: range, onRangeChange: setRange, onLogout: logout }),
+      h(MobileNav, { current: currentNav }),
+      h('main', { id: 'operator-main', className: 'content', tabIndex: -1 }, screen)
     )
   );
 }

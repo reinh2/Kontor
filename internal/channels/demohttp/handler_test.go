@@ -217,6 +217,33 @@ func TestBearerTokenParsing(t *testing.T) {
 	}
 }
 
+func TestOperatorAssetsAreSelfHostedBehindRestrictivePagePolicy(t *testing.T) {
+	handler := newTestHandler(&fakeApplication{}, &fakeTraceReader{}, fakeReady{})
+
+	pageRequest := httptest.NewRequest(http.MethodGet, "/operator", nil)
+	pageResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pageResponse, pageRequest)
+	if pageResponse.Code != http.StatusOK {
+		t.Fatalf("operator page status=%d body=%s", pageResponse.Code, pageResponse.Body.String())
+	}
+	policy := pageResponse.Header().Get("Content-Security-Policy")
+	if !strings.Contains(policy, "script-src 'self'") || !strings.Contains(policy, "connect-src 'self'") {
+		t.Fatalf("operator page CSP=%q", policy)
+	}
+
+	for _, path := range []string{"/operator/vendor/react.js", "/operator/vendor/react-dom.js"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || response.Body.Len() < 1000 {
+			t.Fatalf("asset %s status=%d bytes=%d", path, response.Code, response.Body.Len())
+		}
+		if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/javascript") {
+			t.Fatalf("asset %s Content-Type=%q", path, contentType)
+		}
+	}
+}
+
 func newTestHandler(application applicationService, trace traceReader, ready readinessChecker) http.Handler {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return New(application, trace, ready, logger)

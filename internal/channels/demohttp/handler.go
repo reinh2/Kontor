@@ -59,9 +59,11 @@ func New(application applicationService, trace traceReader, pool readinessChecke
 	mux.HandleFunc("GET /widget/v1/demo", serveStatic("text/html; charset=utf-8", widget.DemoPage))
 
 	// Operator console (Stage 3)
-	mux.HandleFunc("GET /operator", serveStatic("text/html; charset=utf-8", operator.IndexPage))
+	mux.HandleFunc("GET /operator", serveOperatorIndex(operator.IndexPage))
 	mux.HandleFunc("GET /operator/ds/styles.css", serveStatic("text/css; charset=utf-8", operator.DSStyles))
 	mux.HandleFunc("GET /operator/ds/bundle.js", serveStatic("text/javascript; charset=utf-8", operator.DSBundle))
+	mux.HandleFunc("GET /operator/vendor/react.js", serveStatic("text/javascript; charset=utf-8", operator.React))
+	mux.HandleFunc("GET /operator/vendor/react-dom.js", serveStatic("text/javascript; charset=utf-8", operator.ReactDOM))
 	return h.recover(mux)
 }
 
@@ -183,6 +185,15 @@ func serveStatic(contentType string, content []byte) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "public, max-age=300")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		_, _ = w.Write(content)
+	}
+}
+
+func serveOperatorIndex(content []byte) http.HandlerFunc {
+	serve := serveStatic("text/html; charset=utf-8", content)
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		serve(w, r)
 	}
 }
 

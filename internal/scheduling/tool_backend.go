@@ -236,6 +236,65 @@ func (b *ToolBackend) Escalate(ctx context.Context, command toolapi.EscalationCo
 	return outcome, nil
 }
 
+// RescheduleBooking re-checks the proposed new slot and atomically updates the
+// booking under the same serializable isolation used by CreateBooking.
+func (b *ToolBackend) RescheduleBooking(ctx context.Context, command toolapi.RescheduleBookingCommand) (toolapi.RescheduleBookingOutcome, error) {
+	if err := b.authorizeTenant(command.TenantID); err != nil {
+		return toolapi.RescheduleBookingOutcome{}, err
+	}
+	if command.OwnerCustomerID == "" || command.BookingID == "" {
+		return toolapi.RescheduleBookingOutcome{}, toolapi.ErrNotFoundOrNotOwned
+	}
+	result, err := b.repository.RescheduleBooking(ctx, RescheduleBookingRequest{
+		BookingID:       command.BookingID,
+		OwnerCustomerID: command.OwnerCustomerID,
+		NewStartsAt:     command.NewStartAt,
+		NewEndsAt:       command.NewEndAt,
+		Timezone:        command.NewTimezone,
+		IdempotencyKey:  command.IdempotencyKey,
+	})
+	if err != nil {
+		return toolapi.RescheduleBookingOutcome{}, mapToolBackendError(err)
+	}
+	return toolapi.RescheduleBookingOutcome{
+		Booking: toolapi.Booking{
+			ID: result.Booking.ID, Status: result.Booking.Status,
+			ServiceID: result.Booking.ServiceID, StaffID: result.Booking.StaffID,
+			StartAt: result.Booking.StartsAt, EndAt: result.Booking.EndsAt,
+			Timezone: command.NewTimezone, Version: int64(result.Booking.ScheduleVersion),
+		},
+		IdempotencyReplayed: result.Replayed,
+	}, nil
+}
+
+// CancelBooking marks the booking as cancelled with a reason.
+func (b *ToolBackend) CancelBooking(ctx context.Context, command toolapi.CancelBookingCommand) (toolapi.CancelBookingOutcome, error) {
+	if err := b.authorizeTenant(command.TenantID); err != nil {
+		return toolapi.CancelBookingOutcome{}, err
+	}
+	if command.OwnerCustomerID == "" || command.BookingID == "" {
+		return toolapi.CancelBookingOutcome{}, toolapi.ErrNotFoundOrNotOwned
+	}
+	result, err := b.repository.CancelBooking(ctx, CancelBookingRequest{
+		BookingID:       command.BookingID,
+		OwnerCustomerID: command.OwnerCustomerID,
+		Reason:          command.Reason,
+		IdempotencyKey:  command.IdempotencyKey,
+	})
+	if err != nil {
+		return toolapi.CancelBookingOutcome{}, mapToolBackendError(err)
+	}
+	return toolapi.CancelBookingOutcome{
+		Booking: toolapi.Booking{
+			ID: result.Booking.ID, Status: result.Booking.Status,
+			ServiceID: result.Booking.ServiceID, StaffID: result.Booking.StaffID,
+			StartAt: result.Booking.StartsAt, EndAt: result.Booking.EndsAt,
+			Version: int64(result.Booking.ScheduleVersion),
+		},
+		IdempotencyReplayed: result.Replayed,
+	}, nil
+}
+
 func (b *ToolBackend) authorizeTenant(tenantID string) error {
 	if b == nil || b.repository == nil {
 		return fmt.Errorf("%w: scheduling repository is unavailable", toolapi.ErrDependencyUnavailable)
@@ -260,6 +319,8 @@ func mapToolBackendError(err error) error {
 		return toolapi.ErrSlotUnavailable
 	case errors.Is(err, ErrIdempotencyConflict):
 		return toolapi.ErrIdempotencyConflict
+	case errors.Is(err, ErrBookingStateConflict):
+		return toolapi.ErrBookingStateConflict
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return fmt.Errorf("%w: %v", toolapi.ErrDependencyUnavailable, err)
 	default:

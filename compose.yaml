@@ -51,6 +51,7 @@ services:
       HTTP_RATE_LIMIT_BURST: ${HTTP_RATE_LIMIT_BURST:-20}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      OPERATOR_ADMIN_TOKEN: ${OPERATOR_ADMIN_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
