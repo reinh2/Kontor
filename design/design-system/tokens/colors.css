@@ -1,0 +1,167 @@
+/* ============================================================
+   COLORS — Kontor & DocMind
+   Dark theme is the default (:root). Light theme is a variant
+   applied via [data-theme="light"]. Depth comes from surface
+   tone + 1px borders, never heavy shadow.
+   ============================================================ */
+
+:root {
+  /* --- Base neutral ramp (deep blue-grey, never pure black) --- */
+  --grey-950: #0a0d12;
+  --grey-925: #0d1117;
+  --grey-900: #10141b;
+  --grey-850: #141922;
+  --grey-800: #1a2029;
+  --grey-750: #202733;
+  --grey-700: #2a323f;
+  --grey-600: #3a4453;
+  --grey-500: #55606f;
+  --grey-400: #737f8f;
+  --grey-300: #98a2b0;
+  --grey-200: #c2c9d3;
+  --grey-100: #e3e7ec;
+  --grey-050: #f4f6f8;
+
+  /* --- Accent (single) — "Iris", a calm periwinkle-indigo --- */
+  --iris-100: #e7e9ff;
+  --iris-200: #c7ccff;
+  --iris-300: #a3abff;
+  --iris-400: #8a92ff;
+  --iris-500: #6e78f0;
+  --iris-600: #5b64d6;
+  --iris-700: #474fb0;
+  --iris-050: #f2f3ff;
+
+  /* --- Semantic hues (base) --- */
+  --green-500: #3fb95a;
+  --green-600: #2f9448;
+  --green-100: #d6f5df;
+  --amber-500: #e3b341;
+  --amber-600: #c8951f;
+  --amber-100: #fbeecb;
+  --red-500: #f0616d;
+  --red-600: #d84450;
+  --red-100: #fbdcdf;
+
+  /* ---------- SEMANTIC ALIASES (dark, default) ---------- */
+  /* Backgrounds & surfaces (rising tone = rising elevation) */
+  --bg-base: var(--grey-950);
+  --surface-1: var(--grey-900);
+  --surface-2: var(--grey-850);
+  --surface-3: var(--grey-800);
+  --surface-hover: var(--grey-750);
+  --surface-inset: var(--grey-925);
+
+  /* Borders (1px is the depth cue) */
+  --border-subtle: #1e2530;
+  --border-default: #29313d;
+  --border-strong: #3a4453;
+  --border-focus: var(--iris-500);
+
+  /* Text */
+  --text-primary: #edf0f4;
+  --text-secondary: #a4adba;
+  --text-tertiary: #767f8e;
+  --text-disabled: #4a525f;
+  --text-inverse: #0a0d12;
+  --text-accent: var(--iris-400);
+  --text-on-accent: #ffffff;
+
+  /* Accent roles */
+  --accent: var(--iris-500);
+  --accent-hover: var(--iris-400);
+  --accent-active: var(--iris-600);
+  --accent-subtle: color-mix(in oklab, var(--iris-500) 14%, transparent);
+  --accent-border: color-mix(in oklab, var(--iris-500) 40%, transparent);
+  --focus-ring: color-mix(in oklab, var(--iris-500) 45%, transparent);
+
+  /* Status: success / warning / error / neutral / info */
+  --status-success-fg: #5fd07a;
+  --status-success-bg: color-mix(in oklab, var(--green-500) 16%, transparent);
+  --status-success-border: color-mix(in oklab, var(--green-500) 38%, transparent);
+
+  --status-warning-fg: #edc257;
+  --status-warning-bg: color-mix(in oklab, var(--amber-500) 16%, transparent);
+  --status-warning-border: color-mix(in oklab, var(--amber-500) 38%, transparent);
+
+  --status-error-fg: #f47883;
+  --status-error-bg: color-mix(in oklab, var(--red-500) 16%, transparent);
+  --status-error-border: color-mix(in oklab, var(--red-500) 40%, transparent);
+
+  --status-neutral-fg: var(--grey-300);
+  --status-neutral-bg: color-mix(in oklab, var(--grey-400) 14%, transparent);
+  --status-neutral-border: var(--border-default);
+
+  --status-info-fg: var(--iris-400);
+  --status-info-bg: var(--accent-subtle);
+  --status-info-border: var(--accent-border);
+
+  /* Skeleton loading */
+  --skeleton-base: var(--grey-800);
+  --skeleton-shine: var(--grey-700);
+
+  /* Data-viz sequence (calm, cool-leaning) */
+  --viz-1: var(--iris-400);
+  --viz-2: #56b7c9;
+  --viz-3: #5fd07a;
+  --viz-4: #edc257;
+  --viz-5: #b98cff;
+  --viz-6: #f47883;
+
+  color-scheme: dark;
+}
+
+/* ---------- LIGHT THEME VARIANT ---------- */
+[data-theme="light"] {
+  --bg-base: #ffffff;
+  --surface-1: #ffffff;
+  --surface-2: #f7f8fa;
+  --surface-3: #eef0f4;
+  --surface-hover: #eaecf1;
+  --surface-inset: #f4f6f8;
+
+  --border-subtle: #ecedf1;
+  --border-default: #e0e3e9;
+  --border-strong: #cdd2db;
+  --border-focus: var(--iris-500);
+
+  --text-primary: #131720;
+  --text-secondary: #565f6d;
+  --text-tertiary: #656e7c;
+  --text-disabled: #b3bac4;
+  --text-inverse: #ffffff;
+  --text-accent: var(--iris-600);
+  --text-on-accent: #ffffff;
+
+  --accent: var(--iris-500);
+  --accent-hover: var(--iris-600);
+  --accent-active: var(--iris-700);
+  --accent-subtle: color-mix(in oklab, var(--iris-500) 10%, transparent);
+  --accent-border: color-mix(in oklab, var(--iris-500) 28%, transparent);
+  --focus-ring: color-mix(in oklab, var(--iris-500) 35%, transparent);
+
+  --status-success-fg: var(--green-600);
+  --status-success-bg: color-mix(in oklab, var(--green-500) 12%, white);
+  --status-success-border: color-mix(in oklab, var(--green-500) 32%, transparent);
+
+  --status-warning-fg: var(--amber-600);
+  --status-warning-bg: color-mix(in oklab, var(--amber-500) 14%, white);
+  --status-warning-border: color-mix(in oklab, var(--amber-500) 34%, transparent);
+
+  --status-error-fg: var(--red-600);
+  --status-error-bg: color-mix(in oklab, var(--red-500) 10%, white);
+  --status-error-border: color-mix(in oklab, var(--red-500) 32%, transparent);
+
+  --status-neutral-fg: var(--grey-500);
+  --status-neutral-bg: var(--grey-050);
+  --status-neutral-border: var(--border-default);
+
+  --status-info-fg: var(--iris-600);
+  --status-info-bg: var(--accent-subtle);
+  --status-info-border: var(--accent-border);
+
+  --skeleton-base: #eceef2;
+  --skeleton-shine: #f6f7f9;
+
+  color-scheme: light;
+}

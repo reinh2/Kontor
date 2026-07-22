@@ -1,0 +1,49 @@
+/* ============================================================
+   TYPOGRAPHY — one variable grotesk + one monospace.
+   Strict scale, tight negative tracking on large headings.
+   ============================================================ */
+:root {
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', monospace;
+
+  /* Weights */
+  --fw-regular: 400; /* @kind font */
+  --fw-medium: 500; /* @kind font */
+  --fw-semibold: 600; /* @kind font */
+  --fw-bold: 700; /* @kind font */
+
+  /* Type scale (rem, 16px root) */
+  --fs-display-2xl: 4.5rem;   /* 72 — hero landing */
+  --fs-display-xl: 3.5rem;    /* 56 */
+  --fs-display-lg: 2.75rem;   /* 44 */
+  --fs-h1: 2rem;              /* 32 */
+  --fs-h2: 1.5rem;           /* 24 */
+  --fs-h3: 1.25rem;          /* 20 */
+  --fs-h4: 1.0625rem;        /* 17 */
+  --fs-body-lg: 1rem;        /* 16 */
+  --fs-body: 0.9375rem;      /* 15 — app default */
+  --fs-body-sm: 0.8125rem;   /* 13 */
+  --fs-caption: 0.75rem;     /* 12 */
+  --fs-micro: 0.6875rem;     /* 11 — labels, table headers */
+
+  /* Line heights */
+  --lh-tight: 1.05; /* @kind font */
+  --lh-snug: 1.2; /* @kind font */
+  --lh-normal: 1.5; /* @kind font */
+  --lh-relaxed: 1.65; /* @kind font */
+
+  /* Letter spacing — negative tightens large display type */
+  --ls-tighter: -0.03em;
+  --ls-tight: -0.02em;
+  --ls-normal: -0.005em;
+  --ls-wide: 0.02em;
+  --ls-caps: 0.06em;   /* uppercase micro-labels */
+}
+
+/* Convenience text roles (opt-in helper classes) */
+.kk-display { font-family: var(--font-sans); font-weight: var(--fw-semibold); font-size: var(--fs-display-xl); line-height: var(--lh-tight); letter-spacing: var(--ls-tighter); color: var(--text-primary); }
+.kk-h1 { font-family: var(--font-sans); font-weight: var(--fw-semibold); font-size: var(--fs-h1); line-height: var(--lh-snug); letter-spacing: var(--ls-tight); color: var(--text-primary); }
+.kk-h2 { font-family: var(--font-sans); font-weight: var(--fw-semibold); font-size: var(--fs-h2); line-height: var(--lh-snug); letter-spacing: var(--ls-tight); color: var(--text-primary); }
+.kk-body { font-family: var(--font-sans); font-weight: var(--fw-regular); font-size: var(--fs-body); line-height: var(--lh-normal); color: var(--text-secondary); }
+.kk-mono { font-family: var(--font-mono); font-weight: var(--fw-regular); font-size: var(--fs-body-sm); letter-spacing: 0; font-feature-settings: 'ss01', 'zero'; }
+.kk-eyebrow { font-family: var(--font-sans); font-weight: var(--fw-medium); font-size: var(--fs-micro); letter-spacing: var(--ls-caps); text-transform: uppercase; color: var(--text-tertiary); }
