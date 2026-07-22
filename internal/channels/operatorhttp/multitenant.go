@@ -48,49 +48,65 @@ func (s *MultiTenantPostgreSQL) scoped(ctx context.Context) (*PostgreSQL, error)
 
 func (s *MultiTenantPostgreSQL) Dashboard(ctx context.Context, request DashboardRequest) (Dashboard, error) {
 	backend, err := s.scoped(ctx)
-	if err != nil { return Dashboard{}, err }
+	if err != nil {
+		return Dashboard{}, err
+	}
 	return backend.Dashboard(ctx, request)
 }
 
 func (s *MultiTenantPostgreSQL) ListRuns(ctx context.Context, request ListRunsRequest) (RunPage, error) {
 	backend, err := s.scoped(ctx)
-	if err != nil { return RunPage{}, err }
+	if err != nil {
+		return RunPage{}, err
+	}
 	return backend.ListRuns(ctx, request)
 }
 
 func (s *MultiTenantPostgreSQL) GetRun(ctx context.Context, runID string) (RunDetail, error) {
 	backend, err := s.scoped(ctx)
-	if err != nil { return RunDetail{}, err }
+	if err != nil {
+		return RunDetail{}, err
+	}
 	return backend.GetRun(ctx, runID)
 }
 
 func (s *MultiTenantPostgreSQL) Calendar(ctx context.Context, request CalendarRequest) (Calendar, error) {
 	backend, err := s.scoped(ctx)
-	if err != nil { return Calendar{}, err }
+	if err != nil {
+		return Calendar{}, err
+	}
 	return backend.Calendar(ctx, request)
 }
 
 func (s *MultiTenantPostgreSQL) ListCustomers(ctx context.Context, request CustomerListRequest) (CustomerList, error) {
 	backend, err := s.scoped(ctx)
-	if err != nil { return CustomerList{}, err }
+	if err != nil {
+		return CustomerList{}, err
+	}
 	return backend.ListCustomers(ctx, request)
 }
 
 func (s *MultiTenantPostgreSQL) CreateBooking(ctx context.Context, command CreateBookingCommand) (Booking, error) {
 	backend, err := s.scoped(ctx)
-	if err != nil { return Booking{}, err }
+	if err != nil {
+		return Booking{}, err
+	}
 	return backend.CreateBooking(ctx, command)
 }
 
 func (s *MultiTenantPostgreSQL) RescheduleBooking(ctx context.Context, command RescheduleBookingCommand) (Booking, error) {
 	backend, err := s.scoped(ctx)
-	if err != nil { return Booking{}, err }
+	if err != nil {
+		return Booking{}, err
+	}
 	return backend.RescheduleBooking(ctx, command)
 }
 
 func (s *MultiTenantPostgreSQL) CancelBooking(ctx context.Context, command CancelBookingCommand) (Booking, error) {
 	backend, err := s.scoped(ctx)
-	if err != nil { return Booking{}, err }
+	if err != nil {
+		return Booking{}, err
+	}
 	return backend.CancelBooking(ctx, command)
 }
 

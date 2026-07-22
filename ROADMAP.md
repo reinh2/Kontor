@@ -35,7 +35,7 @@ Four rules keep the plan honest and the stages small:
 | 4 | Reminders and CRM hand-off | **Shipped** |
 | 5 | Operator console (live data) | **Shipped** |
 | 6 | Multi-tenancy and identity | **Shipped** |
-| 7 | Production hardening and launch | Planned |
+| 7 | Production hardening and launch | **In progress** 🚧 |
 
 ---
 
@@ -242,6 +242,27 @@ edits.
 scale. Many items here are called out individually in *Release readiness*
 below; this stage is where they are closed.
 
+**Implemented first slice.** Observability and supply-chain hardening have
+started. The API now serves an opt-in Prometheus `/metrics` endpoint
+(`internal/platform/metrics`, standard-library only, no new runtime dependency)
+instrumented with request totals by method and status code, a request-latency
+histogram, an in-flight gauge, an edge rate-limiter rejection counter, and
+build/start-time info. Long-lived SSE streams are counted but excluded from the
+latency histogram so they cannot pin every observation in the `+Inf` bucket; the
+endpoint sits outside the rate limiter and the widget CORS edge, returns
+`no-store`, and requires a bearer token when `METRICS_TOKEN` is set (it is not
+mounted at all unless `METRICS_ENABLED=true`). Startup now **fails closed** when
+the public demo `SLOT_TOKEN_SECRET` or tenant channel encryption key is used
+with `DEMO_MODE=false`, so the compose defaults can no longer reach production
+silently. CI gained a security job running `gofmt`, `govulncheck` (dependency
+and vulnerability scanning), and `gosec` (SAST with reviewed rule exclusions);
+the first `govulncheck` run surfaced `GO-2026-5970` in `golang.org/x/text`,
+fixed by upgrading to `v0.39.0`. All changes are covered by unit tests and pass
+`go test -race`. Distributed tracing, error tracking, dashboards, alerting,
+shared-state horizontal scaling, secrets management, abuse protection, the
+PII lifecycle, rollback/backup procedures, and a real production deploy remain
+open below.
+
 **Scope.**
 - Observability: metrics, distributed tracing, error tracking, dashboards, and
   alerting.
@@ -273,14 +294,19 @@ Boxes are unchecked because they are open.
   RBAC, and server-side revocation; operator authority is never derived from a
   client-provided tenant value.
 - [ ] **Demo secrets by default.** `SLOT_TOKEN_SECRET` ships as
-  `demo-only-change-me-…`; production needs real secrets and a real
-  secrets-management story, not compose env defaults.
+  `demo-only-change-me-…`. Stage 7 makes startup **fail closed** when that value
+  or the demo tenant channel key is used with `DEMO_MODE=false`, so the public
+  defaults can no longer reach production silently; a real secrets-management
+  story (injection, rotation) is still open.
 - [x] **Widget CORS is tenant-scoped.** Public customer and widget routes
   resolve the tenant from the host and require that tenant's canonical widget
   origin; operator and provisioning routes are outside that CORS edge.
 - [ ] **No abuse protection** on conversation creation beyond the in-memory IP
   limiter (no bot/captcha, no per-tenant quotas).
-- [ ] **No dependency/vulnerability scanning or SAST** in CI.
+- [x] **Dependency/vulnerability scanning and SAST in CI.** (Stage 7) —
+  **Done.** CI runs `govulncheck` (gating) and `gosec` (SAST, with reviewed
+  false-positive exclusions) beside a `gofmt` gate. The first `govulncheck` run
+  found and fixed `GO-2026-5970` in `golang.org/x/text` (upgraded to `v0.39.0`).
 
 ### Multi-tenancy and identity
 - [x] **Runtime tenant resolution and onboarding.** Stage 6 resolves customer
@@ -311,8 +337,11 @@ Boxes are unchecked because they are open.
   coverage.
 
 ### Observability and operations
-- [ ] **No metrics, tracing, error tracking, dashboards, or alerting.**
-  Structured logs plus `/healthz` and `/readyz` exist; nothing else. (Stage 7)
+- [ ] **Metrics only; no tracing, error tracking, dashboards, or alerting.**
+  Stage 7 adds an opt-in Prometheus `/metrics` endpoint (HTTP request totals,
+  latency histogram, in-flight gauge, rate-limit rejections, build info) on top
+  of the structured logs and `/healthz`/`/readyz`. Distributed tracing, error
+  tracking, dashboards, and alerting remain. (Stage 7)
 - [ ] **No proactive operator alerting** on escalations or failures. The live
   console now surfaces them, but there are no push notifications or on-call
   alerts. (Stage 7)

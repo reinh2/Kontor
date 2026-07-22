@@ -105,3 +105,31 @@ func TestRateLimiterSeparatesClientsAndPrefersForwardedFor(t *testing.T) {
 		t.Fatal("distinct forwarded client was limited")
 	}
 }
+
+func TestRateLimiterInvokesOnRejectHookForRejectionsOnly(t *testing.T) {
+	limiter := NewRateLimiter(60, 1)
+	rejections := 0
+	limiter.SetOnReject(func() { rejections++ })
+	handler := limiter.Middleware(okHandler())
+
+	send := func() int {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/demo/conversations", nil)
+		r.RemoteAddr = "198.51.100.9:4444"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w.Code
+	}
+
+	if code := send(); code != http.StatusOK {
+		t.Fatalf("first request status=%d, want 200", code)
+	}
+	if rejections != 0 {
+		t.Fatalf("hook fired on an allowed request: %d", rejections)
+	}
+	if code := send(); code != http.StatusTooManyRequests {
+		t.Fatalf("second request status=%d, want 429", code)
+	}
+	if rejections != 1 {
+		t.Fatalf("reject hook count=%d, want 1", rejections)
+	}
+}

@@ -179,6 +179,7 @@ func TestLoadRejectsUnsafeLegacyTenantBootstrapConfiguration(t *testing.T) {
 func setValidLegacyBootstrap(t *testing.T) {
 	t.Helper()
 	t.Setenv("DEMO_MODE", "false")
+	t.Setenv("SLOT_TOKEN_SECRET", "slot-token-secret-0123456789abcdef01")
 	t.Setenv("TENANT_CHANNEL_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 	t.Setenv("STAGE6_BOOTSTRAP_ENABLED", "true")
 	t.Setenv("STAGE6_BOOTSTRAP_TENANT_ID", "00000000-0000-4000-8000-000000000009")
@@ -218,4 +219,59 @@ func TestLoadAdoptsLegacyTelegramOnlyThroughExplicitBootstrap(t *testing.T) {
 			t.Fatal("expected partial legacy Telegram credentials to fail")
 		}
 	})
+}
+
+func TestLoadRejectsDemoSlotSecretOutsideDemo(t *testing.T) {
+	t.Setenv("DEMO_MODE", "false")
+	t.Setenv("TENANT_CHANNEL_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	// SLOT_TOKEN_SECRET intentionally left unset so it falls back to the demo
+	// default, which must be rejected outside demo mode.
+	if _, err := Load(); err == nil {
+		t.Fatal("expected the demo SLOT_TOKEN_SECRET to be rejected outside demo mode")
+	}
+}
+
+func TestLoadRejectsDemoChannelKeyOutsideDemo(t *testing.T) {
+	t.Setenv("DEMO_MODE", "false")
+	t.Setenv("SLOT_TOKEN_SECRET", "slot-token-secret-0123456789abcdef01")
+	t.Setenv("TENANT_CHANNEL_ENCRYPTION_KEY", demoChannelEncryptionKey)
+	if _, err := Load(); err == nil {
+		t.Fatal("expected the demo TENANT_CHANNEL_ENCRYPTION_KEY to be rejected outside demo mode")
+	}
+}
+
+func TestLoadMetricsDefaultsDisabled(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Metrics.Enabled {
+		t.Fatal("metrics endpoint must be disabled by default")
+	}
+	if cfg.Metrics.Token != "" {
+		t.Fatalf("metrics token = %q, want empty by default", cfg.Metrics.Token)
+	}
+}
+
+func TestLoadRejectsShortMetricsToken(t *testing.T) {
+	t.Setenv("METRICS_ENABLED", "true")
+	t.Setenv("METRICS_TOKEN", "too-short")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected a metrics token below 16 bytes to fail")
+	}
+}
+
+func TestLoadAcceptsEnabledMetricsWithToken(t *testing.T) {
+	t.Setenv("METRICS_ENABLED", "true")
+	t.Setenv("METRICS_TOKEN", "metrics-scrape-token-0123456789")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Metrics.Enabled {
+		t.Fatal("metrics endpoint should be enabled")
+	}
+	if cfg.Metrics.Token != "metrics-scrape-token-0123456789" {
+		t.Fatalf("metrics token = %q", cfg.Metrics.Token)
+	}
 }

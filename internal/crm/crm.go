@@ -25,7 +25,7 @@ type Deal struct {
 	ServiceName string
 	StaffName   string
 	StartsAt    time.Time
-	Amount      int64  // minor units
+	Amount      int64 // minor units
 	Currency    string
 }
 

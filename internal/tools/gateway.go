@@ -361,8 +361,8 @@ func (g *Gateway) bookingWindow(now time.Time) (time.Time, time.Time) {
 }
 
 type rescheduleBookingArguments struct {
-	BookingID      string `json:"booking_id"`
-	NewSlot        struct {
+	BookingID string `json:"booking_id"`
+	NewSlot   struct {
 		SlotToken string `json:"slot_token"`
 	} `json:"new_slot"`
 	IdempotencyKey string `json:"idempotency_key"`

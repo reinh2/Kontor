@@ -65,6 +65,8 @@ services:
       HTTP_ALLOWED_ORIGIN: ${HTTP_ALLOWED_ORIGIN:-*}
       HTTP_RATE_LIMIT_PER_MINUTE: ${HTTP_RATE_LIMIT_PER_MINUTE:-60}
       HTTP_RATE_LIMIT_BURST: ${HTTP_RATE_LIMIT_BURST:-20}
+      METRICS_ENABLED: ${METRICS_ENABLED:-false}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy

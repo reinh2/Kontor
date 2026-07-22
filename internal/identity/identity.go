@@ -28,17 +28,17 @@ type Operator struct {
 // tenant facts needed by the operator API, avoiding any tenant selector in
 // browser-originated data requests.
 type Principal struct {
-	SessionID    string
-	TenantID     string
-	TenantSlug   string
-	TenantName   string
-	Timezone     string
-	Currency     string
-	OperatorID   string
-	Email        string
-	DisplayName  string
-	Role         string
-	ExpiresAt    time.Time
+	SessionID   string
+	TenantID    string
+	TenantSlug  string
+	TenantName  string
+	Timezone    string
+	Currency    string
+	OperatorID  string
+	Email       string
+	DisplayName string
+	Role        string
+	ExpiresAt   time.Time
 }
 
 // LoginResult contains the raw opaque bearer token exactly once. The database

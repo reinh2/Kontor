@@ -48,6 +48,7 @@ type RateLimiter struct {
 	burst       float64
 	lastCleanup time.Time
 	now         func() time.Time
+	onReject    func()
 }
 
 type bucket struct {
@@ -70,6 +71,11 @@ func NewRateLimiter(perMinute, burst int) *RateLimiter {
 	}
 }
 
+// SetOnReject registers a callback invoked once per rejected request. It lets
+// the caller observe rate-limit rejections (e.g. a metrics counter) without
+// this package depending on the metrics registry. A nil hook is ignored.
+func (l *RateLimiter) SetOnReject(hook func()) { l.onReject = hook }
+
 // Middleware enforces the limit for every request except liveness and
 // readiness probes. Rejections are controlled 429 responses with Retry-After,
 // mirroring how the deeper admission queue signals overload with 503.
@@ -80,6 +86,9 @@ func (l *RateLimiter) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		if !l.allow(clientKey(r)) {
+			if l.onReject != nil {
+				l.onReject()
+			}
 			w.Header().Set("Retry-After", "5")
 			w.Header().Set("Content-Type", "application/problem+json")
 			w.WriteHeader(http.StatusTooManyRequests)

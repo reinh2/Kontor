@@ -16,6 +16,11 @@ const DefaultTenantID = "00000000-0000-4000-8000-000000000001"
 
 const demoChannelEncryptionKey = "demo-only-tenant-channel-key-32!"
 
+// demoSlotTokenSecret is the intentionally weak default used only for the
+// zero-key demo. Startup rejects it outside demo mode so a production deploy
+// cannot silently sign slot tokens with a public value.
+const demoSlotTokenSecret = "demo-only-change-me-32-bytes-minimum"
+
 type Config struct {
 	Environment string
 	HTTPAddr    string
@@ -35,7 +40,17 @@ type Config struct {
 	SlotTokenSecret string
 	ShutdownTimeout time.Duration
 
-	HTTP HTTP
+	HTTP    HTTP
+	Metrics Metrics
+}
+
+// Metrics controls the Prometheus exposition endpoint. It is disabled by
+// default; the endpoint is only mounted when Enabled is true. When Token is
+// set, scrapers must present it as a bearer token, since the endpoint sits
+// outside the operator session and widget CORS edges.
+type Metrics struct {
+	Enabled bool
+	Token   string
 }
 
 type HTTP struct {
@@ -147,12 +162,16 @@ func Load() (Config, error) {
 			AppTitle:        env("OPENROUTER_APP_TITLE", "Kontor"),
 		},
 		Operator:        Operator{SessionTTL: envDuration("OPERATOR_SESSION_TTL", 12*time.Hour)},
-		SlotTokenSecret: env("SLOT_TOKEN_SECRET", "demo-only-change-me-32-bytes-minimum"),
+		SlotTokenSecret: env("SLOT_TOKEN_SECRET", demoSlotTokenSecret),
 		ShutdownTimeout: envDuration("SHUTDOWN_TIMEOUT", 35*time.Second),
 		HTTP: HTTP{
 			AllowedOrigin:      env("HTTP_ALLOWED_ORIGIN", "*"),
 			RateLimitPerMinute: envInt("HTTP_RATE_LIMIT_PER_MINUTE", 60),
 			RateLimitBurst:     envInt("HTTP_RATE_LIMIT_BURST", 20),
+		},
+		Metrics: Metrics{
+			Enabled: envBool("METRICS_ENABLED", false),
+			Token:   os.Getenv("METRICS_TOKEN"),
 		},
 	}
 	legacyBootstrap, err := LoadLegacyTenantBootstrap(cfg.DemoMode)
@@ -215,6 +234,21 @@ func Load() (Config, error) {
 	}
 	if len(cfg.SlotTokenSecret) < 32 {
 		return Config{}, errors.New("SLOT_TOKEN_SECRET must contain at least 32 bytes")
+	}
+	// Fail closed on the public demo secrets outside demo mode. These values
+	// ship in compose.yaml and .env.example, so accepting them in a real
+	// deployment would sign slot tokens and encrypt tenant channel secrets with
+	// a globally known key.
+	if !cfg.DemoMode {
+		if cfg.SlotTokenSecret == demoSlotTokenSecret {
+			return Config{}, errors.New("SLOT_TOKEN_SECRET is the demo default; set a real secret when DEMO_MODE=false")
+		}
+		if string(cfg.Tenancy.ChannelEncryptionKey) == demoChannelEncryptionKey {
+			return Config{}, errors.New("TENANT_CHANNEL_ENCRYPTION_KEY is the demo default; set a real 32-byte key when DEMO_MODE=false")
+		}
+	}
+	if cfg.Metrics.Token != "" && len(cfg.Metrics.Token) < 16 {
+		return Config{}, errors.New("METRICS_TOKEN must contain at least 16 bytes when set")
 	}
 	if cfg.Operator.SessionTTL < 5*time.Minute || cfg.Operator.SessionTTL > 30*24*time.Hour {
 		return Config{}, errors.New("OPERATOR_SESSION_TTL must be between 5 minutes and 30 days")

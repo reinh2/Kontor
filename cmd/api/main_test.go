@@ -1,11 +1,16 @@
 package main
 
 import (
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/reinhlord/kontor/internal/platform/config"
 	"github.com/reinhlord/kontor/internal/platform/httpx"
+	"github.com/reinhlord/kontor/internal/platform/metrics"
 )
 
 func TestOperatorBranchIsOutsideWidgetCORS(t *testing.T) {
@@ -71,5 +76,83 @@ func TestStage6TelegramRouteCapturesTenantSlug(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent || response.Header().Get("X-Tenant-Slug") != "salon-nord" {
 		t.Fatalf("status=%d tenant slug=%q", response.Code, response.Header().Get("X-Tenant-Slug"))
+	}
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func TestWithMetricsEndpointDisabledPassesThrough(t *testing.T) {
+	app := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-From", "app")
+		w.WriteHeader(http.StatusTeapot)
+	})
+	registry := metrics.NewRegistry()
+	handler := withMetricsEndpoint(app, registry, config.Metrics{Enabled: false}, discardLogger())
+
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusTeapot || response.Header().Get("X-From") != "app" {
+		t.Fatalf("disabled metrics did not pass through: status=%d headers=%v", response.Code, response.Header())
+	}
+}
+
+func TestWithMetricsEndpointEnabledServesExposition(t *testing.T) {
+	app := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-From", "app")
+		w.WriteHeader(http.StatusOK)
+	})
+	registry := metrics.NewRegistry()
+	registry.NewCounter("probe_total", "Probe.").Inc()
+	handler := withMetricsEndpoint(app, registry, config.Metrics{Enabled: true}, discardLogger())
+
+	metricsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(metricsResponse, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if metricsResponse.Code != http.StatusOK {
+		t.Fatalf("metrics status=%d", metricsResponse.Code)
+	}
+	if metricsResponse.Header().Get("X-From") == "app" {
+		t.Fatal("metrics request leaked into the application handler")
+	}
+	if !strings.Contains(metricsResponse.Body.String(), "probe_total 1") {
+		t.Fatalf("exposition missing sample:\n%s", metricsResponse.Body.String())
+	}
+
+	appResponse := httptest.NewRecorder()
+	handler.ServeHTTP(appResponse, httptest.NewRequest(http.MethodGet, "/api/v1/demo/conversations", nil))
+	if appResponse.Header().Get("X-From") != "app" {
+		t.Fatal("non-metrics request did not reach the application handler")
+	}
+}
+
+func TestWithMetricsEndpointTokenGuard(t *testing.T) {
+	registry := metrics.NewRegistry()
+	registry.NewCounter("probe_total", "Probe.").Inc()
+	const token = "metrics-scrape-token-0123456789"
+	handler := withMetricsEndpoint(http.NotFoundHandler(), registry, config.Metrics{Enabled: true, Token: token}, discardLogger())
+
+	cases := []struct {
+		name       string
+		authHeader string
+		wantStatus int
+	}{
+		{"missing token", "", http.StatusUnauthorized},
+		{"wrong token", "Bearer wrong-token-value-0123456789", http.StatusUnauthorized},
+		{"correct token", "Bearer " + token, http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+			if tc.authHeader != "" {
+				request.Header.Set("Authorization", tc.authHeader)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != tc.wantStatus {
+				t.Fatalf("status=%d, want %d", response.Code, tc.wantStatus)
+			}
+		})
 	}
 }

@@ -9,3 +9,12 @@ bin/
 /semantic-review/
 coverage.out
 *.test
+
+# AI context documents (live on ai-context branch; local-only in working tree)
+AGENTS.md
+CLAUDE.md
+docs/product.md
+docs/architecture.md
+docs/coding-standards.md
+docs/decisions.md
+docs/current-status.md

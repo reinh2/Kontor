@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,8 +26,14 @@ import (
 	"github.com/reinhlord/kontor/internal/platform/database"
 	"github.com/reinhlord/kontor/internal/platform/httpx"
 	"github.com/reinhlord/kontor/internal/platform/logging"
+	"github.com/reinhlord/kontor/internal/platform/metrics"
 	"github.com/reinhlord/kontor/internal/tenants"
 )
+
+// version is the build version stamped via -ldflags "-X main.version=...".
+// It defaults to "dev" for local and test builds and surfaces in the
+// kontor_build_info metric.
+var version = "dev"
 
 func main() {
 	if len(os.Args) == 3 && os.Args[1] == "healthcheck" {
@@ -152,8 +160,18 @@ func run() error {
 	}
 
 	limiter := httpx.NewRateLimiter(cfg.HTTP.RateLimitPerMinute, cfg.HTTP.RateLimitBurst)
+	registry := metrics.NewRegistry()
+	metrics.RegisterProcessInfo(registry, version)
+	httpMetrics := metrics.NewHTTP(registry)
+	limiter.SetOnReject(httpMetrics.RateLimited)
+
 	tenantPublic := tenanthttp.PublicTenant(tenantStore, cfg.Tenancy.HostSuffix, publicRoutes)
-	handler := buildStage6HTTPHandler(publicRoutes, tenantPublic, operatorHandler, onboardingHandler, webhook, limiter)
+	appHandler := buildStage6HTTPHandler(publicRoutes, tenantPublic, operatorHandler, onboardingHandler, webhook, limiter)
+	instrumented := httpMetrics.Middleware(metrics.HTTPConfig{
+		Ignore:    isHealthProbe,
+		LongLived: isEventStream,
+	}, appHandler)
+	handler := withMetricsEndpoint(instrumented, registry, cfg.Metrics, logger)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -210,6 +228,58 @@ func buildStage6HTTPHandler(unscopedRoutes, tenantPublic, operatorHandler, onboa
 	routes.Handle("/widget/", edge(tenantPublic))
 	routes.Handle("/", edge(unscopedRoutes))
 	return routes
+}
+
+// withMetricsEndpoint mounts the Prometheus exposition endpoint alongside the
+// instrumented application handler. The endpoint is opt-in and deliberately
+// sits outside the rate limiter and the instrumentation wrapper. When a token
+// is configured it is required as a bearer credential, because /metrics is
+// outside the operator-session and widget-CORS edges and can expose internal
+// signals to anyone who can reach it.
+func withMetricsEndpoint(app http.Handler, registry *metrics.Registry, cfg config.Metrics, logger *slog.Logger) http.Handler {
+	if !cfg.Enabled {
+		return app
+	}
+	logger.Info("metrics endpoint enabled", "path", "/metrics", "token_required", cfg.Token != "")
+	routes := http.NewServeMux()
+	routes.Handle("GET /metrics", guardMetricsToken(cfg.Token, registry.Handler()))
+	routes.Handle("/", app)
+	return routes
+}
+
+// guardMetricsToken requires a matching bearer token when one is configured. An
+// empty token leaves the endpoint open, which is only safe when the scrape port
+// is network-restricted; the startup log records which mode is active.
+func guardMetricsToken(token string, next http.Handler) http.Handler {
+	if token == "" {
+		return next
+	}
+	expected := []byte(token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(provided), expected) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="metrics"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isHealthProbe matches the liveness and readiness endpoints, which are skipped
+// by instrumentation so their uniform, high-frequency traffic does not swamp
+// the request counters.
+func isHealthProbe(r *http.Request) bool {
+	return r.URL.Path == "/healthz" || r.URL.Path == "/readyz"
+}
+
+// isEventStream matches the SSE endpoint (GET .../conversations/{id}/events).
+// Its connections live for minutes, so they are counted but excluded from the
+// latency histogram, which would otherwise report every stream as a +Inf outlier.
+func isEventStream(r *http.Request) bool {
+	return r.Method == http.MethodGet &&
+		strings.HasPrefix(r.URL.Path, "/api/v1/demo/conversations/") &&
+		strings.HasSuffix(r.URL.Path, "/events")
 }
 
 // buildHTTPHandler is retained for the Stage 5 route-boundary unit test. The

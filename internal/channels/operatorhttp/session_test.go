@@ -34,13 +34,27 @@ func (b *sessionScopedBackend) Dashboard(ctx context.Context, _ DashboardRequest
 	b.tenantIDs = append(b.tenantIDs, principal.TenantID)
 	return Dashboard{}, nil
 }
-func (*sessionScopedBackend) ListRuns(context.Context, ListRunsRequest) (RunPage, error) { return RunPage{}, nil }
-func (*sessionScopedBackend) GetRun(context.Context, string) (RunDetail, error) { return RunDetail{}, nil }
-func (*sessionScopedBackend) Calendar(context.Context, CalendarRequest) (Calendar, error) { return Calendar{}, nil }
-func (*sessionScopedBackend) ListCustomers(context.Context, CustomerListRequest) (CustomerList, error) { return CustomerList{}, nil }
-func (*sessionScopedBackend) CreateBooking(context.Context, CreateBookingCommand) (Booking, error) { return Booking{}, nil }
-func (*sessionScopedBackend) RescheduleBooking(context.Context, RescheduleBookingCommand) (Booking, error) { return Booking{}, nil }
-func (*sessionScopedBackend) CancelBooking(context.Context, CancelBookingCommand) (Booking, error) { return Booking{}, nil }
+func (*sessionScopedBackend) ListRuns(context.Context, ListRunsRequest) (RunPage, error) {
+	return RunPage{}, nil
+}
+func (*sessionScopedBackend) GetRun(context.Context, string) (RunDetail, error) {
+	return RunDetail{}, nil
+}
+func (*sessionScopedBackend) Calendar(context.Context, CalendarRequest) (Calendar, error) {
+	return Calendar{}, nil
+}
+func (*sessionScopedBackend) ListCustomers(context.Context, CustomerListRequest) (CustomerList, error) {
+	return CustomerList{}, nil
+}
+func (*sessionScopedBackend) CreateBooking(context.Context, CreateBookingCommand) (Booking, error) {
+	return Booking{}, nil
+}
+func (*sessionScopedBackend) RescheduleBooking(context.Context, RescheduleBookingCommand) (Booking, error) {
+	return Booking{}, nil
+}
+func (*sessionScopedBackend) CancelBooking(context.Context, CancelBookingCommand) (Booking, error) {
+	return Booking{}, nil
+}
 
 func TestSessionAuthenticationReturnsPrincipalAndScopesBackend(t *testing.T) {
 	validator := testSessionValidator{principals: map[string]identity.Principal{

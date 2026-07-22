@@ -42,25 +42,33 @@ func (p tenantApplicationProxy) components(ctx context.Context) (*app.Service, *
 
 func (p tenantApplicationProxy) CreateConversation(ctx context.Context, profile conversations.Profile) (conversations.Conversation, error) {
 	application, _, _, err := p.components(ctx)
-	if err != nil { return conversations.Conversation{}, err }
+	if err != nil {
+		return conversations.Conversation{}, err
+	}
 	return application.CreateConversation(ctx, profile)
 }
 
 func (p tenantApplicationProxy) VerifyConversationCapability(ctx context.Context, conversationID, token string) error {
 	application, _, _, err := p.components(ctx)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	return application.VerifyConversationCapability(ctx, conversationID, token)
 }
 
 func (p tenantApplicationProxy) SendMessage(ctx context.Context, conversationID, text, clientMessageID string) (app.TurnResult, error) {
 	application, _, _, err := p.components(ctx)
-	if err != nil { return app.TurnResult{}, err }
+	if err != nil {
+		return app.TurnResult{}, err
+	}
 	return application.SendMessage(ctx, conversationID, text, clientMessageID)
 }
 
 func (p tenantApplicationProxy) ConversationEvents(ctx context.Context, conversationID string, afterID int64, limit int) ([]conversations.Event, error) {
 	application, _, _, err := p.components(ctx)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return application.ConversationEvents(ctx, conversationID, afterID, limit)
 }
 
@@ -68,9 +76,13 @@ type tenantTraceProxy struct{ runtime tenantRuntime }
 
 func (p tenantTraceProxy) GetRun(ctx context.Context, runID string) (agenttrace.RunTrace, error) {
 	tenant, ok := tenants.FromContext(ctx)
-	if !ok { return agenttrace.RunTrace{}, errors.New("demo HTTP: host tenant was not resolved") }
+	if !ok {
+		return agenttrace.RunTrace{}, errors.New("demo HTTP: host tenant was not resolved")
+	}
 	_, _, trace, err := p.runtime.ApplicationFor(ctx, tenant.ID)
-	if err != nil { return agenttrace.RunTrace{}, err }
+	if err != nil {
+		return agenttrace.RunTrace{}, err
+	}
 	return trace.GetRun(ctx, runID)
 }
 

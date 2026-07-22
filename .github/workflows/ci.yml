@@ -183,3 +183,48 @@ jobs:
             echo "Expected exactly one booking after confirmation; found ${bookings_after}" >&2
             exit 1
           fi
+
+  security:
+    name: Security scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check gofmt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: Dependency and vulnerability scan (govulncheck)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+      - name: Static analysis (gosec)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          # Excluded rules are reviewed false positives for this codebase:
+          #   G101  the "pbkdf2-sha256" scheme name is a label, not a credential
+          #   G115  integer conversions are bounded (advisory-lock key; jitter modulo)
+          #   G404  math/rand is used only for retry/backoff jitter, never for security
+          #   G704  outbound HTTP targets are server-configured (Telegram API, healthcheck)
+          "$(go env GOPATH)/bin/gosec" -quiet -exclude=G101,G115,G404,G704 ./...
