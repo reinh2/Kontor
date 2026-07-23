@@ -125,7 +125,7 @@ func NewEngineForTimezone(name string) (*Engine, error) {
 	}
 	location, err := time.LoadLocation(name)
 	if err != nil {
-		return nil, fmt.Errorf("%w: timezone %q: %v", ErrInvalidInput, name, err)
+		return nil, fmt.Errorf("%w: timezone %q: %w", ErrInvalidInput, name, err)
 	}
 	return NewEngine(location), nil
 }
@@ -255,7 +255,7 @@ func (e *Engine) validate(in SearchInput) (*time.Location, time.Duration, error)
 		var err error
 		location, err = time.LoadLocation(in.Staff.Timezone)
 		if err != nil {
-			return nil, 0, fmt.Errorf("%w: staff timezone %q: %v", ErrInvalidInput, in.Staff.Timezone, err)
+			return nil, 0, fmt.Errorf("%w: staff timezone %q: %w", ErrInvalidInput, in.Staff.Timezone, err)
 		}
 	}
 	step := in.SlotInterval

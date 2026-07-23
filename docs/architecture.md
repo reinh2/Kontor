@@ -220,7 +220,7 @@ deploy/nginx/       Nginx configuration
 | Item | Impact | Evidence | Preferred next step |
 |---|---|---|---|
 | Single-instance rate limiter (in-memory) | Cannot scale horizontally | `internal/platform/httpx/` | Move to shared store (Redis or DB) |
-| No external linter (golangci-lint) | Only `go vet` catches issues | Makefile has no lint target | Add golangci-lint to CI |
+| No live demo deployment | The widget, traces, and console cannot be evaluated without running Compose locally | README quick start is the only entry point | Deploy the demo with the fake adapter and link it from README |
 | No down-migrations or restore runbook | Risky schema changes in production | `db/migrations/` forward-only | Document rollback procedure |
 | CORS defaults to `*` | Insecure for production | `compose.yaml` env | Lock per-tenant origin before launch |
 | No tracing/alerting | Limited production insight | Opt-in Prometheus `/metrics` exists (`internal/platform/metrics/`); no tracing/alerting | Add OpenTelemetry + alerting (Stage 7) |

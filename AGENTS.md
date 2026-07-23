@@ -34,6 +34,12 @@ make fmt
 # Static analysis
 go vet ./...
 
+# Lint (requires golangci-lint v2)
+make lint
+
+# Everything CI checks that needs neither Docker nor a database
+make check
+
 # Unit tests (no DB required)
 go test ./...
 
@@ -65,6 +71,7 @@ make down
 
 - Requested behavior is implemented.
 - `go vet ./...` passes.
+- `golangci-lint run ./...` passes (or `make check`).
 - `go test ./...` passes (excluding documented WIP failures).
 - New behavior has appropriate tests.
 - Failure and security paths were considered.

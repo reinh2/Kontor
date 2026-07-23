@@ -1,0 +1,59 @@
+# golangci-lint configuration.
+#
+# The project deliberately keeps its dependency surface small, so the linter set
+# is the standard one plus a few checks that protect invariants this codebase
+# cares about: unclosed HTTP response bodies in the LLM/CRM adapters, ignored
+# errors on database and transaction calls, and context propagation.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  # contextcheck is deliberately absent: a transaction rollback must run on a
+  # fresh context precisely because the caller's is usually already cancelled,
+  # and the linter flags every such site.
+  enable:
+    - bodyclose # provider adapters must close every response body
+    - errorlint # errors.Is/As instead of == and type assertions
+    - misspell
+    - nilerr # returning nil after a non-nil error hides failures
+    - rowserrcheck # pgx row iteration must check Err()
+    - unconvert
+    - wastedassign
+
+  settings:
+    staticcheck:
+      # SA (correctness) and S (simplification) checks stay on; QF quick-fixes
+      # are editor refactor suggestions, not defects.
+      checks:
+        - all
+        - -QF1001 # De Morgan's law rewrites
+        - -QF1002 # tagged switch rewrites
+        - -QF1003 # if/else-if to switch rewrites
+    errcheck:
+      # Deferred rollbacks and best-effort writes are intentional; they are
+      # already routed through helpers such as rollbackTx.
+      exclude-functions:
+        - (github.com/jackc/pgx/v5.Tx).Rollback
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # Vendored browser assets and embedded frontends are not Go source.
+      - path: web/operator/vendor/
+        linters:
+          - all
+      # Table-driven tests intentionally shadow and ignore some values.
+      - path: _test\.go$
+        linters:
+          - errcheck
+          - contextcheck
+
+formatters:
+  enable:
+    - gofmt

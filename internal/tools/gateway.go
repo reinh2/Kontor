@@ -192,8 +192,9 @@ func (g *Gateway) restoreFrozenAction(
 	if err != nil || !found || state.Proposal.ID != confirmationID || state.Binding.Tool != tool ||
 		len(state.Binding.ArgumentsJSON) == 0 {
 		// Leave the call untouched. The confirmation checks downstream still
-		// decide whether it may execute.
-		return arguments, nil
+		// decide whether it may execute, so a lookup failure here can only
+		// withhold the frozen action — never authorize one.
+		return arguments, nil //nolint:nilerr // fails closed downstream by design
 	}
 	var frozen map[string]any
 	if err := json.Unmarshal(state.Binding.ArgumentsJSON, &frozen); err != nil {

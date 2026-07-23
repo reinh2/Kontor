@@ -296,7 +296,7 @@ func (r *PGXRepository) createBookingOnce(ctx context.Context, request CreateBoo
 	}
 	location, err := time.LoadLocation(member.Timezone)
 	if err != nil {
-		return CreateBookingResult{}, fmt.Errorf("%w: stored staff timezone %q: %v", ErrInvalidInput, member.Timezone, err)
+		return CreateBookingResult{}, fmt.Errorf("%w: stored staff timezone %q: %w", ErrInvalidInput, member.Timezone, err)
 	}
 	endsAt := request.StartsAt.Add(service.Duration)
 	lockDates := touchedLocalDates(
@@ -550,15 +550,15 @@ func (r *PGXRepository) rescheduleBookingOnce(ctx context.Context, request Resch
 		return RescheduleBookingResult{}, err
 	}
 
-	// Complete idempotency record.
+	// Complete the idempotency record. A failure here is deliberately ignored:
+	// the reschedule itself is already part of this transaction, and a stale
+	// in-progress record only costs a replay its fast path.
 	if request.IdempotencyKey != "" {
-		if _, err := tx.Exec(ctx, `
+		_, _ = tx.Exec(ctx, `
 			UPDATE idempotency_records
 			SET status = 'completed', resource_id = $4, completed_at = now()
 			WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3`,
-			r.tenantID, idempotencyScope, request.IdempotencyKey, updated.ID); err != nil {
-			// Non-fatal; the booking itself is committed.
-		}
+			r.tenantID, idempotencyScope, request.IdempotencyKey, updated.ID)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -713,15 +713,15 @@ func (r *PGXRepository) cancelBookingOnce(ctx context.Context, request CancelBoo
 		return CancelBookingResult{}, err
 	}
 
-	// Complete idempotency record.
+	// Complete the idempotency record. See the reschedule path: a failure here
+	// is deliberately ignored because the cancellation is already in this
+	// transaction.
 	if request.IdempotencyKey != "" {
-		if _, err := tx.Exec(ctx, `
+		_, _ = tx.Exec(ctx, `
 			UPDATE idempotency_records
 			SET status = 'completed', resource_id = $4, completed_at = now()
 			WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3`,
-			r.tenantID, idempotencyScope, request.IdempotencyKey, cancelled.ID); err != nil {
-			// Non-fatal.
-		}
+			r.tenantID, idempotencyScope, request.IdempotencyKey, cancelled.ID)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -916,7 +916,7 @@ func (r *PGXRepository) adminCreateBookingOnce(ctx context.Context, request Admi
 	}
 	location, err := time.LoadLocation(member.Timezone)
 	if err != nil {
-		return CreateBookingResult{}, fmt.Errorf("%w: stored staff timezone %q: %v", ErrInvalidInput, member.Timezone, err)
+		return CreateBookingResult{}, fmt.Errorf("%w: stored staff timezone %q: %w", ErrInvalidInput, member.Timezone, err)
 	}
 	endsAt := request.StartsAt.Add(service.Duration)
 	lockDates := touchedLocalDates(

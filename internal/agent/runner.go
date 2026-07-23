@@ -769,7 +769,7 @@ func isJSONObject(raw json.RawMessage) bool {
 
 func turnContextError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("%w: %v", ErrTurnTimeout, err)
+		return fmt.Errorf("%w: %w", ErrTurnTimeout, err)
 	}
 	return err
 }

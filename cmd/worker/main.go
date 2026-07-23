@@ -125,7 +125,9 @@ func (w *Worker) Run(ctx context.Context) error {
 		jobs, err := w.queue.ClaimBatch(ctx, w.batchSize)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				// A claim that failed because the worker is shutting down is a
+				// clean stop, not a processing failure.
+				return nil //nolint:nilerr // graceful shutdown, not an error path
 			}
 			w.logger.Error("claim batch failed", "error", err)
 			select {

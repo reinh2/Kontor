@@ -456,8 +456,10 @@ func isTransientTransportError(err error) bool {
 		errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) {
 		return true
 	}
+	// net.Error.Temporary is deprecated and ill-defined; the syscall list above
+	// already names the transport failures worth retrying.
 	var networkError net.Error
-	return errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary())
+	return errors.As(err, &networkError) && networkError.Timeout()
 }
 
 func addProviderUsage(total *Usage, usage Usage) {

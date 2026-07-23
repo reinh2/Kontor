@@ -4,7 +4,7 @@
 
 - Formatter: `gofmt` (standard Go formatter, no config file)
 - Static analysis: `go vet ./...` (standard Go vet)
-- Linter: Not configured (no golangci-lint or equivalent)
+- Linter: `golangci-lint` v2, configured in `.golangci.yml`, enforced by the `lint` CI job
 - Test framework: `testing` stdlib + `go test`
 - CI workflow: `.github/workflows/ci.yml`
 
@@ -15,7 +15,8 @@ When this document conflicts with executable configuration, investigate and upda
 | Purpose | Command | Verified on | Notes |
 |---|---|---|---|
 | Format | `make fmt` or `gofmt -w $(find cmd internal db -name '*.go' -type f)` | 2026-07-23 | Standard gofmt |
-| Static analysis | `go vet ./...` | 2026-07-23 | Pass |
+| Static analysis | `go vet ./...` | 2026-07-24 | Pass |
+| Lint | `make lint` or `golangci-lint run ./...` | 2026-07-24 | Pass (0 issues, v2.12.2) |
 | Unit/integration tests | `make test` or `go test ./...` | 2026-07-23 | Integration tests need `TEST_DATABASE_URL` |
 | Tests with race detector | `make test-race` or `go test -race ./...` | 2026-07-23 | CI always runs with `-race` |
 | Integration tests | `make test-integration` | Not run locally | Requires `TEST_DATABASE_URL` env var |
@@ -115,6 +116,7 @@ When this document conflicts with executable configuration, investigate and upda
 
 - Requested acceptance criteria are met.
 - `go vet ./...` passes.
+- `golangci-lint run ./...` passes (or `make check`).
 - `go test ./...` passes (excluding known WIP failures).
 - New behavior has appropriate tests.
 - Failure and security paths were reviewed.

@@ -184,7 +184,7 @@ func (b *ToolBackend) Escalate(ctx context.Context, command toolapi.EscalationCo
 	}
 	tx, err := b.repository.pool.Begin(ctx)
 	if err != nil {
-		return toolapi.EscalationOutcome{}, fmt.Errorf("%w: begin escalation: %v", toolapi.ErrDependencyUnavailable, err)
+		return toolapi.EscalationOutcome{}, fmt.Errorf("%w: begin escalation: %w", toolapi.ErrDependencyUnavailable, err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	tag, err := tx.Exec(ctx, `
@@ -192,7 +192,7 @@ func (b *ToolBackend) Escalate(ctx context.Context, command toolapi.EscalationCo
 		WHERE tenant_id=$1 AND id=$2 AND customer_id=$3`,
 		command.TenantID, command.ConversationID, command.OwnerCustomerID)
 	if err != nil {
-		return toolapi.EscalationOutcome{}, fmt.Errorf("%w: mark conversation escalated: %v", toolapi.ErrDependencyUnavailable, err)
+		return toolapi.EscalationOutcome{}, fmt.Errorf("%w: mark conversation escalated: %w", toolapi.ErrDependencyUnavailable, err)
 	}
 	if tag.RowsAffected() != 1 {
 		return toolapi.EscalationOutcome{}, toolapi.ErrNotFoundOrNotOwned
@@ -228,10 +228,10 @@ func (b *ToolBackend) Escalate(ctx context.Context, command toolapi.EscalationCo
 			command.ReasonCode, command.Summary).Scan(&outcome.ID, &outcome.Status)
 	}
 	if err != nil {
-		return toolapi.EscalationOutcome{}, fmt.Errorf("%w: persist escalation: %v", toolapi.ErrDependencyUnavailable, err)
+		return toolapi.EscalationOutcome{}, fmt.Errorf("%w: persist escalation: %w", toolapi.ErrDependencyUnavailable, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return toolapi.EscalationOutcome{}, fmt.Errorf("%w: commit escalation: %v", toolapi.ErrDependencyUnavailable, err)
+		return toolapi.EscalationOutcome{}, fmt.Errorf("%w: commit escalation: %w", toolapi.ErrDependencyUnavailable, err)
 	}
 	return outcome, nil
 }
@@ -343,9 +343,9 @@ func mapToolBackendError(err error) error {
 	case errors.Is(err, ErrBookingStateConflict):
 		return toolapi.ErrBookingStateConflict
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return fmt.Errorf("%w: %v", toolapi.ErrDependencyUnavailable, err)
+		return fmt.Errorf("%w: %w", toolapi.ErrDependencyUnavailable, err)
 	default:
-		return fmt.Errorf("%w: %v", toolapi.ErrDependencyUnavailable, err)
+		return fmt.Errorf("%w: %w", toolapi.ErrDependencyUnavailable, err)
 	}
 }
 
