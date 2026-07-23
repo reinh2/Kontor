@@ -25,6 +25,12 @@ type Job struct {
 // Handler processes a single job. Return nil for success, error for retry.
 type Handler func(ctx context.Context, job Job) error
 
+// defaultStaleClaimLease bounds how long a job may sit in the 'claimed' state
+// before RequeueStaleClaims treats it as abandoned by a dead worker. It must be
+// comfortably larger than the worker's per-job timeout so a job that is still
+// legitimately executing is never reclaimed underneath a live worker.
+const defaultStaleClaimLease = 5 * time.Minute
+
 // EnqueueParams holds the parameters for inserting a new job.
 type EnqueueParams struct {
 	TenantID       string
@@ -193,6 +199,80 @@ func (q *Queue) deadLetter(ctx context.Context, jobID, tenantID string, jobErr e
 		slog.String("error", jobErr.Error()),
 	)
 	return nil
+}
+
+// RequeueStaleClaims recovers jobs stranded in the 'claimed' state by a worker
+// that died (or was cancelled at shutdown) between ClaimBatch and the terminal
+// Complete/Fail write. ClaimBatch only ever selects 'pending' rows, so without
+// this a stranded claim — and its reminder/CRM side effect — would be lost
+// forever, weakening the transactional-outbox guarantee.
+//
+// A claimed row whose claim is older than lease is returned to 'pending' for
+// another attempt; if it already exhausted its attempts it is dead-lettered
+// instead, so a job that reliably crashes a worker cannot loop indefinitely.
+// The move to 'dead'/'pending' is done with UPDATE ... RETURNING so concurrent
+// reapers (multi-worker deployments) never double-process the same row.
+func (q *Queue) RequeueStaleClaims(ctx context.Context, lease time.Duration) (requeued int64, deadLettered int64, err error) {
+	if lease <= 0 {
+		lease = defaultStaleClaimLease
+	}
+	seconds := lease.Seconds()
+
+	tx, err := q.pool.Begin(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("jobqueue: requeue stale begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Dead-letter stale claims that already used their last attempt. The UPDATE
+	// flips the rows out of 'claimed' atomically, so its RETURNING set is the
+	// exact input for the dead-letter copy.
+	deadTag, err := tx.Exec(ctx, `
+		WITH stale AS (
+			UPDATE jobs
+			SET status = 'dead', dead_at = now(), claimed_at = NULL, last_error = $2
+			WHERE status = 'claimed'
+			  AND claimed_at < now() - make_interval(secs => $1)
+			  AND attempts >= max_attempts
+			RETURNING tenant_id, id, booking_id, job_type, payload_json,
+			          attempts, max_attempts, idempotency_key, created_at
+		)
+		INSERT INTO dead_letter_jobs
+		    (tenant_id, original_job_id, booking_id, job_type, payload_json,
+		     attempts, max_attempts, last_error, idempotency_key, dead_at, created_at)
+		SELECT tenant_id, id, booking_id, job_type, payload_json,
+		       attempts, max_attempts, $2, idempotency_key, now(), created_at
+		FROM stale`,
+		seconds, "stale claim exceeded max attempts")
+	if err != nil {
+		return 0, 0, fmt.Errorf("jobqueue: dead-letter stale claims: %w", err)
+	}
+	deadLettered = deadTag.RowsAffected()
+
+	// Return the remaining stale claims to pending for another poll to retry.
+	reTag, err := tx.Exec(ctx, `
+		UPDATE jobs
+		SET status = 'pending', next_retry_at = now(), claimed_at = NULL, last_error = $2
+		WHERE status = 'claimed'
+		  AND claimed_at < now() - make_interval(secs => $1)
+		  AND attempts < max_attempts`,
+		seconds, "reclaimed after stale claim lease")
+	if err != nil {
+		return 0, 0, fmt.Errorf("jobqueue: requeue stale claims: %w", err)
+	}
+	requeued = reTag.RowsAffected()
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, 0, fmt.Errorf("jobqueue: requeue stale commit: %w", err)
+	}
+
+	if requeued > 0 || deadLettered > 0 {
+		q.logger.LogAttrs(ctx, slog.LevelWarn, "recovered stale claimed jobs",
+			slog.Int64("requeued", requeued),
+			slog.Int64("dead_lettered", deadLettered),
+		)
+	}
+	return requeued, deadLettered, nil
 }
 
 // Enqueue inserts a new job inside an existing transaction. It uses an

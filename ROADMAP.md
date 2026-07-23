@@ -419,3 +419,121 @@ for them: billing/subscriptions and usage metering, a marketing site, mobile
 apps, analytics beyond the operator dashboard, and any channel beyond the
 widget and Telegram (email-in, WhatsApp, etc.). They are deferred, not
 rejected.
+
+---
+
+## Code review — full audit (2026-07-23)
+
+A whole-repository review (Go, 98 source files, ~15.6k non-test lines).
+`gofmt -l`, `go vet ./...`, `go test ./...`, and `go test -race -count=1 ./...`
+all pass cleanly on Go 1.26.5 — so the items below are **latent logic and
+reliability defects, not build breaks**. Each names the file/symbol, the
+concrete failure, and a fix direction.
+
+> Note: this contradicts the stale `docs/current-status.md` /
+> `docs/architecture.md` claim of a failing `tenanthttp` test and unformatted
+> Stage-6 files — both are resolved (see D-3).
+
+### Verified correct
+
+The safety core holds up under review: DB-level double-booking protection
+(`bookings_no_staff_overlap` exclusion constraint + serializable transactions +
+`schedule_locks`), two-phase confirmation bound to
+tenant/customer/conversation/tool/arguments-hash with an assistant-message-seen
+`EXISTS` check, tenant isolation from server-built principals
+(`operatorhttp.MultiTenantPostgreSQL.scoped`, `ToolBackend.authorizeTenant`),
+identity (PBKDF2-SHA256 600k, constant-time compare, digest-only sessions,
+AES-GCM with per-tenant AAD), the save-first / SSE-after-commit ordering in
+`internal/app`, and the OpenRouter adapter's bounded retry/backoff/size limits.
+
+### Defects found
+
+- [x] **D-1 · Medium · correctness — customer reschedule/cancel don't map DB
+  errors or retry serialization conflicts.** — **Fixed 2026-07-23.**
+  In [`internal/scheduling/repository.go`](internal/scheduling/repository.go:396)
+  the customer `RescheduleBooking` and
+  [`CancelBooking`](internal/scheduling/repository.go:546) run their transaction
+  **once** and return raw wrapped errors, unlike `CreateBooking` and all three
+  `Admin*` paths, which loop on `isTransactionRetry` and funnel every failure
+  through `mapDatabaseError`. Consequences: (a) a reschedule onto a now-occupied
+  slot raises the exclusion-constraint violation `23P01`, which is returned as a
+  raw `"update booking: %w"` — so
+  [`mapToolBackendError`](internal/scheduling/tool_backend.go:333) misses
+  `ErrSlotUnavailable` and falls to `ErrDependencyUnavailable` (**retryable**).
+  The gateway then reports `DEPENDENCY_UNAVAILABLE` with `retryable=true`, so
+  [`agenttools.Executor`](internal/agenttools/executor.go:89) retries an
+  operation that can never succeed up to `AGENT_TOOL_MAX_ATTEMPTS` times, instead
+  of the clean `SLOT_UNAVAILABLE` / `find_another_slot` the create path returns;
+  (b) a transient `40001` serialization failure on these two paths is not retried
+  at all. The double-booking invariant itself is **not** violated — the
+  constraint still blocks the overlap — but the customer-facing error and retry
+  behaviour are wrong and untested (the only `ErrSlotUnavailable`-on-reschedule
+  test covers the *admin* path). **Fix:** wrap both customer paths in the same
+  retry loop + `mapDatabaseError` used by `CreateBooking`.
+
+- [x] **D-2 · Medium · reliability — job queue has no stale-claim recovery
+  (silent reminder/CRM loss).** — **Fixed 2026-07-23.**
+  [`Queue.ClaimBatch`](internal/jobqueue/postgres.go:51) flips rows to
+  `status='claimed'` and increments `attempts`, but the queue only ever selects
+  `status='pending'` and nothing resets a stranded `claimed` row. If the worker
+  dies between claim and terminal write — or, at shutdown,
+  [`processOne`](cmd/worker/main.go:166) calls `Fail`/`Complete` with the
+  already-cancelled **parent** `ctx` (not `jobCtx`) so those writes fail — the
+  job stays `claimed` forever and its `send_reminder` / `crm_upsert_contact`
+  side effect is silently dropped. This weakens ADR-007's "guaranteed if and only
+  if the booking commits": the enqueue is transactional, but delivery is not
+  recoverable. **Fix:** add a reaper/visibility-timeout that returns
+  `claimed` rows older than a lease back to `pending` (respecting `attempts`),
+  and use a shutdown-safe context for terminal `Fail`/`Complete`.
+
+- [x] **D-3 · Low · documentation — status docs describe problems that no longer
+  exist.** — **Fixed 2026-07-23.** [`docs/current-status.md`](docs/current-status.md) and the "known
+  technical debt" table in [`docs/architecture.md`](docs/architecture.md:227)
+  still report a failing `tenanthttp` test
+  (`TestPublicTenantScopesEachHostToItsOwnTenant`) and unformatted Stage-6 files;
+  the working tree is clean on all checks. Separately, `internal/platform/metrics/`
+  exists in the code but is absent from the architecture repository map. **Fix:**
+  refresh `docs/current-status.md`, drop the stale debt row, and add the metrics
+  package to the architecture map.
+
+- [x] **D-4 · Low · info-hygiene — the demo HTTP handler echoed raw `err.Error()`
+  in responses.** — **Fixed 2026-07-23.** Six sites in
+  `internal/channels/demohttp/` wrote raw service/decoder/DB error text into the
+  problem `detail`, contrary to the project's own coding standard and unlike
+  `operatorhttp`/`onboardinghttp`. Most notably [`getRun`](internal/channels/demohttp/handler.go:142)
+  performed the trace lookup *before* the capability check, leaking internal
+  error text and a run-existence oracle (404 vs 401) to unauthenticated callers.
+  Practical severity was low (run IDs are unguessable UUIDs; the strings were
+  generic error text, not secrets), but it violated the standard.
+
+### Resolution (2026-07-23)
+
+All three findings are fixed and verified.
+
+- **D-1** — `internal/scheduling/repository.go`: the customer `RescheduleBooking`
+  and `CancelBooking` bodies were extracted into `rescheduleBookingOnce` /
+  `cancelBookingOnce` and are now driven by the same 3-attempt
+  `isTransactionRetry` loop and `mapDatabaseError` mapping as `CreateBooking` and
+  the Admin paths. An overlapping-slot reschedule now returns `ErrSlotUnavailable`
+  (→ `SLOT_UNAVAILABLE` / `find_another_slot`), and `40001` conflicts are retried.
+  Regression: `internal/scheduling/reschedule_conflict_integration_test.go`.
+- **D-2** — `internal/jobqueue/postgres.go`: added `Queue.RequeueStaleClaims`,
+  which returns claims older than a lease to `pending` (dead-lettering exhausted
+  ones via an atomic `UPDATE … RETURNING` move). `cmd/worker/main.go` runs it on
+  a timer (`reapInterval`) and records terminal `Complete`/`Fail` under a
+  shutdown-safe `context.WithoutCancel` so a finished job is never stranded.
+  Regression: `internal/scheduling/stale_claim_integration_test.go`.
+- **D-3** — refreshed `docs/current-status.md`, added `internal/platform/metrics`
+  to the architecture map, and removed the stale "1 failing test" debt row.
+- **D-4** — `internal/channels/demohttp/`: added an `internalError` helper (log +
+  generic 500), moved the `getRun` bearer-token check ahead of the trace lookup,
+  added the `app.ErrInvalidMessage` sentinel (→ 400), and replaced every raw
+  `err.Error()` in a response with a controlled message. Regression tests:
+  `TestGetRunWithoutTokenReturnsUnauthorizedBeforeLookup`,
+  `TestGetRunInternalErrorIsGeneric`,
+  `TestSendMessageInvalidMessageReturnsBadRequestWithoutLeak`.
+
+Verification: `gofmt -l` (clean), `go vet ./...` (clean), `go test ./...` and
+`go test -race -count=1 ./...` (all green). The two new tests are integration
+tests that require `TEST_DATABASE_URL`; they compile and skip locally (no
+PostgreSQL/Docker was available here) and run in CI.

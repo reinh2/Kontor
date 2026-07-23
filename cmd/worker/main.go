@@ -26,6 +26,14 @@ const (
 	defaultBatchSize    = 10
 	defaultConcurrency  = 4
 	defaultJobTimeout   = 30 * time.Second
+	// defaultStaleClaimLease must exceed defaultJobTimeout so a job still being
+	// worked is never reclaimed from under a live worker; defaultReapInterval is
+	// how often the loop scans for claims stranded by a crashed worker.
+	defaultStaleClaimLease = 5 * time.Minute
+	defaultReapInterval    = 1 * time.Minute
+	// terminalWriteTimeout bounds the shutdown-safe write that records a job's
+	// terminal state even when the worker context is already cancelled.
+	terminalWriteTimeout = 5 * time.Second
 )
 
 func main() {
@@ -70,14 +78,16 @@ func run() error {
 	crmDriver := crm.NewLogCRM(logger)
 
 	worker := &Worker{
-		queue:        queue,
-		notifier:     notifier,
-		crm:          crmDriver,
-		logger:       logger,
-		pollInterval: defaultPollInterval,
-		batchSize:    defaultBatchSize,
-		concurrency:  defaultConcurrency,
-		jobTimeout:   defaultJobTimeout,
+		queue:           queue,
+		notifier:        notifier,
+		crm:             crmDriver,
+		logger:          logger,
+		pollInterval:    defaultPollInterval,
+		batchSize:       defaultBatchSize,
+		concurrency:     defaultConcurrency,
+		jobTimeout:      defaultJobTimeout,
+		staleClaimLease: defaultStaleClaimLease,
+		reapInterval:    defaultReapInterval,
 	}
 
 	logger.Info("worker ready", "stage", 4, "concurrency", worker.concurrency, "poll_interval", worker.pollInterval)
@@ -86,14 +96,17 @@ func run() error {
 
 // Worker is the job processing loop.
 type Worker struct {
-	queue        *jobqueue.Queue
-	notifier     notifications.Notifier
-	crm          crm.CRM
-	logger       *slog.Logger
-	pollInterval time.Duration
-	batchSize    int
-	concurrency  int
-	jobTimeout   time.Duration
+	queue           *jobqueue.Queue
+	notifier        notifications.Notifier
+	crm             crm.CRM
+	logger          *slog.Logger
+	pollInterval    time.Duration
+	batchSize       int
+	concurrency     int
+	jobTimeout      time.Duration
+	staleClaimLease time.Duration
+	reapInterval    time.Duration
+	lastReap        time.Time
 }
 
 // Run polls for jobs until the context is cancelled, processing them with
@@ -106,6 +119,8 @@ func (w *Worker) Run(ctx context.Context) error {
 			return nil
 		default:
 		}
+
+		w.maybeReapStaleClaims(ctx)
 
 		jobs, err := w.queue.ClaimBatch(ctx, w.batchSize)
 		if err != nil {
@@ -153,23 +168,50 @@ func (w *Worker) processBatch(ctx context.Context, jobs []jobqueue.Job) {
 	wg.Wait()
 }
 
+// maybeReapStaleClaims periodically returns jobs stranded in 'claimed' by a
+// crashed or shut-down worker to 'pending' (or dead-letters exhausted ones). It
+// is throttled by reapInterval and tolerates errors: the next tick retries.
+func (w *Worker) maybeReapStaleClaims(ctx context.Context) {
+	if w.reapInterval <= 0 {
+		return
+	}
+	if !w.lastReap.IsZero() && time.Since(w.lastReap) < w.reapInterval {
+		return
+	}
+	w.lastReap = time.Now()
+	if _, _, err := w.queue.RequeueStaleClaims(ctx, w.staleClaimLease); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		w.logger.Error("requeue stale claims failed", "error", err)
+	}
+}
+
 func (w *Worker) processOne(ctx context.Context, job jobqueue.Job) {
 	jobCtx, cancel := context.WithTimeout(ctx, w.jobTimeout)
 	defer cancel()
 
 	err := w.dispatch(jobCtx, job)
+
+	// The job's work has finished; its terminal state must be recorded even if
+	// the worker is shutting down. A detached, bounded context keeps a completed
+	// or failed job from being stranded in 'claimed' by a cancelled ctx (the
+	// stale-claim reaper is the backstop, not the primary path).
+	termCtx, termCancel := context.WithTimeout(context.WithoutCancel(ctx), terminalWriteTimeout)
+	defer termCancel()
+
 	if err != nil {
 		w.logger.Warn("job failed",
 			"job_id", job.ID, "job_type", job.JobType,
 			"attempts", job.Attempts, "error", err,
 		)
-		if failErr := w.queue.Fail(ctx, job.ID, err); failErr != nil {
+		if failErr := w.queue.Fail(termCtx, job.ID, err); failErr != nil {
 			w.logger.Error("fail job error", "job_id", job.ID, "error", failErr)
 		}
 		return
 	}
 
-	if completeErr := w.queue.Complete(ctx, job.ID); completeErr != nil {
+	if completeErr := w.queue.Complete(termCtx, job.ID); completeErr != nil {
 		w.logger.Error("complete job error", "job_id", job.ID, "error", completeErr)
 	}
 }

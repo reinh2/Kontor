@@ -3,6 +3,7 @@ package demohttp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -140,6 +141,67 @@ func TestGetRunRequiresCapabilityForOwningConversation(t *testing.T) {
 	}
 	if strings.Contains(validResponse.Body.String(), "token-b") {
 		t.Fatal("trace response leaked capability token")
+	}
+}
+
+func TestGetRunWithoutTokenReturnsUnauthorizedBeforeLookup(t *testing.T) {
+	traces := &fakeTraceReader{runs: map[string]agenttrace.RunTrace{
+		"run-b": {ID: "run-b", ConversationID: "conversation-b", Status: "completed"},
+	}}
+	handler := newTestHandler(&fakeApplication{}, traces, fakeReady{})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/demo/runs/run-b", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("no-token run status=%d, want 401", response.Code)
+	}
+	if response.Header().Get("WWW-Authenticate") == "" {
+		t.Fatal("missing WWW-Authenticate challenge")
+	}
+	// The existence and contents of the run must not leak before authentication.
+	if body := response.Body.String(); strings.Contains(body, "completed") || strings.Contains(body, "conversation-b") {
+		t.Fatalf("unauthenticated response leaked run detail: %s", body)
+	}
+}
+
+func TestGetRunInternalErrorIsGeneric(t *testing.T) {
+	traces := &fakeTraceReader{getErr: errors.New("dial tcp secret-db-host:5432: connection refused")}
+	handler := newTestHandler(&fakeApplication{}, traces, fakeReady{})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/demo/runs/run-x", nil)
+	request.Header.Set("Authorization", "Bearer any-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("internal error status=%d, want 500", response.Code)
+	}
+	if strings.Contains(response.Body.String(), "secret-db-host") {
+		t.Fatalf("500 response leaked internal error detail: %s", response.Body.String())
+	}
+}
+
+func TestSendMessageInvalidMessageReturnsBadRequestWithoutLeak(t *testing.T) {
+	application := &fakeApplication{
+		capabilities: map[string]string{"conversation-a": "token-a"},
+		sendErr:      app.ErrInvalidMessage,
+	}
+	handler := newTestHandler(application, &fakeTraceReader{}, fakeReady{})
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/demo/conversations/conversation-a/messages",
+		strings.NewReader(`{"text":"hi"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer token-a")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid message status=%d, want 400", response.Code)
+	}
+	if strings.Contains(response.Body.String(), "app:") {
+		t.Fatalf("400 response leaked sentinel error text: %s", response.Body.String())
 	}
 }
 
@@ -291,10 +353,14 @@ func (f *fakeApplication) SendMessage(_ context.Context, conversationID, _, _ st
 }
 
 type fakeTraceReader struct {
-	runs map[string]agenttrace.RunTrace
+	runs   map[string]agenttrace.RunTrace
+	getErr error
 }
 
 func (f *fakeTraceReader) GetRun(_ context.Context, runID string) (agenttrace.RunTrace, error) {
+	if f.getErr != nil {
+		return agenttrace.RunTrace{}, f.getErr
+	}
 	run, found := f.runs[runID]
 	if !found {
 		return agenttrace.RunTrace{}, pgx.ErrNoRows

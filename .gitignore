@@ -10,6 +10,9 @@ bin/
 coverage.out
 *.test
 
+# Generated code-analysis output
+graphify-out/
+
 # AI context documents (live on ai-context branch; local-only in working tree)
 AGENTS.md
 CLAUDE.md

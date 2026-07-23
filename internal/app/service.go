@@ -37,6 +37,11 @@ type Config struct {
 
 var ErrTurnOverloaded = errors.New("app: conversation turn capacity is exhausted")
 
+// ErrInvalidMessage is returned when the inbound customer message is empty or
+// exceeds the configured byte limit. Channel handlers map it to a 400 without
+// surfacing internal detail.
+var ErrInvalidMessage = errors.New("app: message is empty or exceeds the size limit")
+
 // TurnOverloadError reports bounded admission pressure without exposing
 // database or internal capacity details at the channel boundary.
 type TurnOverloadError struct {
@@ -153,7 +158,7 @@ func (s *Service) SendMessage(ctx context.Context, conversationID, text, clientM
 		return TurnResult{}, errors.New("conversation ID is required")
 	}
 	if text == "" || len([]byte(text)) > s.config.MaxMessageBytes {
-		return TurnResult{}, errors.New("message must be non-empty and within the configured byte limit")
+		return TurnResult{}, ErrInvalidMessage
 	}
 	// The application deadline starts before admission and serialization, so
 	// queueing cannot silently extend the configured turn budget.

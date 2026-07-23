@@ -605,3 +605,122 @@ SSE-стримминг (`sse.go`), HubSpot CRM-драйвер, registry метр
 
 Оценка: кодовая база в хорошем состоянии. Открытыми остаются только задачи из
 раздела «Готовность к выпуску», не являющиеся дефектами кода.
+
+### Новый полный аудит (2026-07-23)
+
+Повторный обзор всего репозитория (Go, 98 исходных файлов, ~15.6k строк без
+тестов). `gofmt -l`, `go vet ./...`, `go test ./...` и
+`go test -race -count=1 ./...` проходят чисто на Go 1.26.5 — поэтому пункты ниже
+это **скрытые дефекты логики и надёжности, а не ошибки сборки**. Каждый указывает
+файл/символ, конкретный сбой и направление исправления.
+
+> Примечание: это противоречит устаревшему утверждению в
+> `docs/current-status.md` / `docs/architecture.md` о падающем тесте
+> `tenanthttp` и неформатированных файлах Этапа 6 — оба пункта уже неактуальны
+> (см. Д-3).
+
+**Проверено и признано корректным.** Безопасное ядро выдерживает обзор: защита
+от двойного бронирования на уровне БД (`bookings_no_staff_overlap` +
+сериализуемые транзакции + `schedule_locks`), двухэтапное подтверждение,
+привязанное к tenant/customer/conversation/tool/arguments-hash с проверкой
+`EXISTS` показанного ассистентом сообщения, изоляция тенантов из построенного
+сервером принципала (`operatorhttp.MultiTenantPostgreSQL.scoped`,
+`ToolBackend.authorizeTenant`), идентификация (PBKDF2-SHA256 600k, constant-time,
+хранение только дайджеста сессии, AES-GCM с per-tenant AAD), порядок
+save-first / SSE-после-коммита в `internal/app` и retry/backoff/лимит размера в
+адаптере OpenRouter.
+
+**Найденные дефекты:**
+
+- [x] **Д-1 · Средний · корректность — клиентские reschedule/cancel не
+  маппят ошибки БД и не повторяют сериализационные конфликты.** — **Исправлено 2026-07-23.**
+  В [`internal/scheduling/repository.go`](internal/scheduling/repository.go:396)
+  клиентский `RescheduleBooking` и
+  [`CancelBooking`](internal/scheduling/repository.go:546) выполняют транзакцию
+  **однократно** и возвращают сырые обёрнутые ошибки — в отличие от
+  `CreateBooking` и всех трёх путей `Admin*`, которые крутят цикл по
+  `isTransactionRetry` и прогоняют любой сбой через `mapDatabaseError`.
+  Следствия: (a) перенос на уже занятый слот вызывает нарушение exclusion-
+  ограничения `23P01`, которое возвращается сырым `"update booking: %w"`, поэтому
+  [`mapToolBackendError`](internal/scheduling/tool_backend.go:333) не распознаёт
+  `ErrSlotUnavailable` и уходит в `ErrDependencyUnavailable` (**retryable**).
+  Шлюз отдаёт `DEPENDENCY_UNAVAILABLE` с `retryable=true`, и
+  [`agenttools.Executor`](internal/agenttools/executor.go:89) повторяет заведомо
+  безуспешную операцию до `AGENT_TOOL_MAX_ATTEMPTS` раз — вместо чистого
+  `SLOT_UNAVAILABLE` / `find_another_slot`, который отдаёт путь создания;
+  (b) транзиентный сбой сериализации `40001` на этих двух путях не повторяется
+  вовсе. Сам инвариант «нет двойного бронирования» **не** нарушается — ограничение
+  всё равно блокирует пересечение — но клиентская ошибка и поведение повтора
+  неверны и не покрыты тестом (единственный тест `ErrSlotUnavailable` при
+  reschedule проверяет *admin*-путь). **Исправление:** обернуть оба клиентских
+  пути тем же циклом повтора + `mapDatabaseError`, что и `CreateBooking`.
+
+- [x] **Д-2 · Средний · надёжность — у очереди задач нет восстановления
+  зависших claimed-строк (тихая потеря напоминания/CRM).** — **Исправлено 2026-07-23.**
+  [`Queue.ClaimBatch`](internal/jobqueue/postgres.go:51) переводит строки в
+  `status='claimed'` и увеличивает `attempts`, но очередь выбирает только
+  `status='pending'`, и ничто не возвращает зависшую `claimed`-строку. Если
+  воркер падает между claim и терминальной записью — или при завершении
+  [`processOne`](cmd/worker/main.go:166) вызывает `Fail`/`Complete` с уже
+  отменённым **родительским** `ctx` (а не `jobCtx`), из-за чего эти записи не
+  проходят — задача навсегда остаётся `claimed`, а её побочный эффект
+  `send_reminder` / `crm_upsert_contact` молча теряется. Это ослабляет ADR-007
+  «гарантировано тогда и только тогда, когда бронирование зафиксировано»: enqueue
+  транзакционен, но доставка не восстанавливается. **Исправление:** добавить
+  reaper/visibility-timeout, возвращающий `claimed`-строки старше аренды в
+  `pending` (с учётом `attempts`), и использовать shutdown-безопасный контекст
+  для терминальных `Fail`/`Complete`.
+
+- [x] **Д-3 · Низкий · документация — статус-документы описывают уже
+  несуществующие проблемы.** — **Исправлено 2026-07-23.** [`docs/current-status.md`](docs/current-status.md)
+  и таблица «известного техдолга» в
+  [`docs/architecture.md`](docs/architecture.md:227) всё ещё сообщают о падающем
+  тесте `tenanthttp` (`TestPublicTenantScopesEachHostToItsOwnTenant`) и
+  неформатированных файлах Этапа 6; рабочее дерево чисто по всем проверкам. Кроме
+  того, пакет `internal/platform/metrics/` есть в коде, но отсутствует в карте
+  репозитория в `architecture.md`. **Исправление:** обновить
+  `docs/current-status.md`, убрать устаревшую строку техдолга и добавить пакет
+  метрик в карту архитектуры.
+
+- [x] **Д-4 · Низкий · гигиена информации — demo-хендлер отдавал «сырой»
+  `err.Error()` в ответах.** — **Исправлено 2026-07-23.** Шесть мест в
+  `internal/channels/demohttp/` писали внутренний текст ошибки в `detail`, вопреки
+  их же стандарту и в отличие от `operatorhttp`/`onboardinghttp`. Особенно
+  [`getRun`](internal/channels/demohttp/handler.go:142): он делал lookup трейса
+  **до** проверки capability, раскрывая внутренний текст ошибки и оракул
+  существования run (404 vs 401) неаутентифицированному вызывающему. Практическая
+  опасность низкая (run-id — неугадываемые UUID; строки — generic-текст, не
+  секреты), но это нарушало стандарт.
+
+### Устранение (2026-07-23)
+
+Все три пункта исправлены и проверены.
+
+- **Д-1** — `internal/scheduling/repository.go`: тела клиентских
+  `RescheduleBooking` и `CancelBooking` вынесены в `rescheduleBookingOnce` /
+  `cancelBookingOnce` и теперь управляются тем же циклом из 3 попыток по
+  `isTransactionRetry` и маппингом `mapDatabaseError`, что и `CreateBooking` и
+  Admin-пути. Перенос на занятый слот теперь возвращает `ErrSlotUnavailable`
+  (→ `SLOT_UNAVAILABLE` / `find_another_slot`), а конфликты `40001` повторяются.
+  Регрессионный тест: `internal/scheduling/reschedule_conflict_integration_test.go`.
+- **Д-2** — `internal/jobqueue/postgres.go`: добавлен `Queue.RequeueStaleClaims`,
+  возвращающий claim-строки старше аренды в `pending` (исчерпавшие попытки —
+  в dead-letter через атомарный `UPDATE … RETURNING`). `cmd/worker/main.go`
+  запускает его по таймеру (`reapInterval`) и пишет терминальные
+  `Complete`/`Fail` под shutdown-безопасным `context.WithoutCancel`, поэтому
+  завершённая задача не зависает. Регрессионный тест:
+  `internal/scheduling/stale_claim_integration_test.go`.
+- **Д-3** — обновлён `docs/current-status.md`, пакет `internal/platform/metrics`
+  добавлен в карту архитектуры, устаревшая строка «1 падающий тест» удалена.
+- **Д-4** — `internal/channels/demohttp/`: добавлен хелпер `internalError` (лог +
+  generic 500), проверка bearer-токена в `getRun` перенесена перед lookup трейса,
+  добавлен sentinel `app.ErrInvalidMessage` (→ 400), и каждый «сырой»
+  `err.Error()` в ответе заменён на контролируемое сообщение. Регрессионные тесты:
+  `TestGetRunWithoutTokenReturnsUnauthorizedBeforeLookup`,
+  `TestGetRunInternalErrorIsGeneric`,
+  `TestSendMessageInvalidMessageReturnsBadRequestWithoutLeak`.
+
+Проверки: `gofmt -l` (чисто), `go vet ./...` (чисто), `go test ./...` и
+`go test -race -count=1 ./...` (всё зелёное). Два новых теста — интеграционные и
+требуют `TEST_DATABASE_URL`; локально они компилируются и пропускаются (здесь не
+было доступного PostgreSQL/Docker), выполняются в CI.

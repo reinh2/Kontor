@@ -404,6 +404,31 @@ func (r *PGXRepository) RescheduleBooking(ctx context.Context, request Reschedul
 		return RescheduleBookingResult{}, fmt.Errorf("%w: new_starts_at must be before new_ends_at", ErrInvalidInput)
 	}
 
+	// Mirror CreateBooking and the Admin paths: retry serializable conflicts and
+	// map database errors (notably the exclusion-constraint violation for an
+	// overlapping new slot) to the domain error taxonomy so a genuine conflict
+	// surfaces as ErrSlotUnavailable rather than an opaque, misleadingly
+	// retryable dependency error.
+	var result RescheduleBookingResult
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		result, err = r.rescheduleBookingOnce(ctx, request)
+		if err == nil {
+			return result, nil
+		}
+		if !isTransactionRetry(err) || attempt == 3 {
+			return RescheduleBookingResult{}, mapDatabaseError(err)
+		}
+		select {
+		case <-ctx.Done():
+			return RescheduleBookingResult{}, ctx.Err()
+		case <-time.After(time.Duration(attempt*10) * time.Millisecond):
+		}
+	}
+	return RescheduleBookingResult{}, mapDatabaseError(err)
+}
+
+func (r *PGXRepository) rescheduleBookingOnce(ctx context.Context, request RescheduleBookingRequest) (RescheduleBookingResult, error) {
 	const rescheduleScope = "booking.reschedule.v1"
 	idempotencyScope := rescheduleScope + ":" + request.OwnerCustomerID
 
@@ -551,6 +576,29 @@ func (r *PGXRepository) CancelBooking(ctx context.Context, request CancelBooking
 		return CancelBookingResult{}, fmt.Errorf("%w: booking_id, owner, and reason are required", ErrInvalidInput)
 	}
 
+	// Mirror CreateBooking and the Admin paths: retry serializable conflicts and
+	// map database errors to the domain error taxonomy instead of returning a
+	// raw wrapped error the tool layer cannot classify.
+	var result CancelBookingResult
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		result, err = r.cancelBookingOnce(ctx, request)
+		if err == nil {
+			return result, nil
+		}
+		if !isTransactionRetry(err) || attempt == 3 {
+			return CancelBookingResult{}, mapDatabaseError(err)
+		}
+		select {
+		case <-ctx.Done():
+			return CancelBookingResult{}, ctx.Err()
+		case <-time.After(time.Duration(attempt*10) * time.Millisecond):
+		}
+	}
+	return CancelBookingResult{}, mapDatabaseError(err)
+}
+
+func (r *PGXRepository) cancelBookingOnce(ctx context.Context, request CancelBookingRequest) (CancelBookingResult, error) {
 	const cancelScope = "booking.cancel.v1"
 	idempotencyScope := cancelScope + ":" + request.OwnerCustomerID
 

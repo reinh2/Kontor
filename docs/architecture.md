@@ -69,6 +69,7 @@ internal/
     httpx/          CORS, rate limiter, response helpers
     ids/            UUID generation
     logging/        Structured slog setup
+    metrics/        Prometheus registry and exposition endpoint
   scheduling/       Availability engine, booking repository, schedule locks
   tenants/          Tenant store, channel config, crypto
   tools/            Tool definitions and the schema/capability/confirmation gateway
@@ -185,7 +186,7 @@ deploy/nginx/       Nginx configuration
 - Structured `log/slog` logging (JSON in non-dev environments).
 - `/healthz` (process alive) and `/readyz` (PostgreSQL reachable) probes.
 - Persisted agent traces: iterations, tool calls, attempts, token usage, outcomes.
-- No metrics, distributed tracing, or alerting configured.
+- Opt-in Prometheus metrics endpoint (`internal/platform/metrics/`); no distributed tracing or alerting configured.
 
 ### Configuration
 
@@ -222,12 +223,11 @@ deploy/nginx/       Nginx configuration
 | No external linter (golangci-lint) | Only `go vet` catches issues | Makefile has no lint target | Add golangci-lint to CI |
 | No down-migrations or restore runbook | Risky schema changes in production | `db/migrations/` forward-only | Document rollback procedure |
 | CORS defaults to `*` | Insecure for production | `compose.yaml` env | Lock per-tenant origin before launch |
-| No metrics/tracing/alerting | Blind in production | Only logs + probes | Add OpenTelemetry (Stage 7) |
+| No tracing/alerting | Limited production insight | Opt-in Prometheus `/metrics` exists (`internal/platform/metrics/`); no tracing/alerting | Add OpenTelemetry + alerting (Stage 7) |
 | Operator console served without CSP | XSS risk in production | `web/operator/` embedded HTML | Add Content-Security-Policy header |
-| Stage 6 WIP: 1 failing test | `tenanthttp` middleware test fails | `go test ./...` output | Complete tenant resolution implementation |
 
 ## Proposed architecture
 
-Stage 6 (multi-tenancy and identity) is partially implemented in the working tree: `internal/identity/`, `internal/tenants/`, `internal/channels/onboardinghttp/`, `internal/channels/tenanthttp/`, and migration `000006`. This is work-in-progress and not yet merged to main. See `ROADMAP.md` Stage 6 for the full scope.
+Stage 6 (multi-tenancy and identity) is complete: `internal/identity/`, `internal/tenants/`, `internal/channels/onboardinghttp/`, `internal/channels/tenanthttp/`, and migration `000006`. See `ROADMAP.md` Stage 6 for the full scope.
 
-Stage 7 (production hardening) is planned but has no code. See `ROADMAP.md` Stage 7.
+Stage 7 (production hardening) is in progress: its first slice — the opt-in Prometheus `/metrics` endpoint (`internal/platform/metrics/`), secrets hardening, and CI vulnerability/SAST scanning — has landed; the remaining scope (shared-store rate limiting, tracing/alerting, external calendar sync, rollback/restore runbook) is open. See `ROADMAP.md` Stage 7.

@@ -42,7 +42,7 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	cursor, err := lastEventID(r)
 	if err != nil {
-		writeProblem(w, http.StatusBadRequest, "invalid cursor", err.Error())
+		writeProblem(w, http.StatusBadRequest, "invalid cursor", "Last-Event-ID must be a non-negative integer")
 		return
 	}
 

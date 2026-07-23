@@ -89,11 +89,19 @@ func (h *Handler) createConversation(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusBadRequest, "invalid request", err.Error())
 		return
 	}
+	// Validate at the boundary so a rejected profile answers 400 with a safe,
+	// self-authored message, and any error from the service is treated as
+	// internal rather than echoed back to the client.
+	if strings.TrimSpace(input.DisplayName) == "" ||
+		(strings.TrimSpace(input.Email) == "" && strings.TrimSpace(input.Phone) == "") {
+		writeProblem(w, http.StatusBadRequest, "conversation rejected", "display_name and at least one of email or phone are required")
+		return
+	}
 	created, err := h.app.CreateConversation(r.Context(), conversations.Profile{
 		DisplayName: input.DisplayName, Email: input.Email, Phone: input.Phone,
 	})
 	if err != nil {
-		writeProblem(w, http.StatusBadRequest, "conversation rejected", err.Error())
+		h.internalError(w, r, "create conversation failed", err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -124,29 +132,36 @@ func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.app.SendMessage(r.Context(), conversationID, input.Text, input.ClientMessageID)
 	if err != nil {
-		if errors.Is(err, app.ErrTurnOverloaded) {
+		switch {
+		case errors.Is(err, app.ErrTurnOverloaded):
 			w.Header().Set("Retry-After", "1")
 			writeProblem(w, http.StatusServiceUnavailable, "service busy", "Too many conversation turns are active; retry shortly")
-			return
+		case errors.Is(err, app.ErrInvalidMessage):
+			writeProblem(w, http.StatusBadRequest, "invalid message", "The message must be non-empty and within the size limit")
+		case errors.Is(err, conversations.ErrNotFound):
+			writeProblem(w, http.StatusNotFound, "conversation not found", "The requested conversation does not exist")
+		default:
+			h.internalError(w, r, "conversation turn failed", err)
 		}
-		status := http.StatusInternalServerError
-		if errors.Is(err, conversations.ErrNotFound) {
-			status = http.StatusNotFound
-		}
-		writeProblem(w, status, "turn failed", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
+	// Require a bearer token before any lookup so an unauthenticated caller can
+	// neither probe run existence (404 vs 401) nor receive internal error detail.
+	if _, ok := bearerToken(r.Header.Get("Authorization")); !ok {
+		writeAuthProblem(w, "A valid conversation Bearer token is required")
+		return
+	}
 	run, err := h.trace.GetRun(r.Context(), r.PathValue("runID"))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeProblem(w, http.StatusNotFound, "run not found", "The requested run does not exist")
 		return
 	}
 	if err != nil {
-		writeProblem(w, http.StatusInternalServerError, "trace failed", err.Error())
+		h.internalError(w, r, "run trace query failed", err)
 		return
 	}
 	if !h.requireConversationCapability(w, r, run.ConversationID) {
@@ -220,6 +235,14 @@ func (h *Handler) recover(next http.Handler) http.Handler {
 	})
 }
 
+// internalError logs the underlying cause and returns a generic 500, so raw
+// service or database error text never reaches the client (mirrors the operator
+// handler's discipline and the project coding standard).
+func (h *Handler) internalError(w http.ResponseWriter, r *http.Request, operation string, err error) {
+	h.logger.Error(operation, "method", r.Method, "path", r.URL.Path, "error", err)
+	writeProblem(w, http.StatusInternalServerError, "internal error", "The request could not be completed")
+}
+
 func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {
 	if contentType := r.Header.Get("Content-Type"); contentType != "" && !strings.HasPrefix(contentType, "application/json") {
 		return errors.New("Content-Type must be application/json")
@@ -228,7 +251,9 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
-		return err
+		// A raw decoder error can echo request content or field names; return a
+		// controlled, self-authored message instead.
+		return errors.New("the request body must be a single valid JSON object")
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return errors.New("request body must contain one JSON object")

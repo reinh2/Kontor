@@ -1,69 +1,59 @@
 # Current Project Status
 
-- **Last updated:** 2026-07-23 by Kiro (AI context setup)
-- **Branch / worktree:** `stage5-operator-calendar-commands` (ahead of `main` by 1 commit)
-- **Current goal:** Complete Stage 6 — multi-tenancy and operator identity
+- **Last updated:** 2026-07-23
+- **Branch / worktree:** `main`
+- **Current goal:** Stage 7 — production hardening and launch
 
 ## Stable working state
 
-- Stages 1–5 are complete and merged to `main`: conversation-to-booking core, channels (widget, SSE, Telegram), design implementation, reminders/CRM, operator console with live data and calendar commands.
-- CI passes on `main`: vet, race-detector tests, Docker builds, authenticated Compose smoke test.
+- Stages 1–6 are complete: conversation-to-booking core, channels (widget, SSE, Telegram), design implementation, reminders/CRM, operator console with live data and calendar commands, and multi-tenancy + operator identity.
+- All local checks are green: `gofmt -l` reports no unformatted files, `go vet ./...` passes, `go test ./...` passes, and `go test -race -count=1 ./...` passes.
 - Both binaries (`cmd/api`, `cmd/worker`) build and run successfully.
 
 ## Recently completed
 
-- Stage 5 operator calendar commands: admin-token-guarded create/reschedule/cancel endpoints with optimistic version checks, transactional reminder updates, and full SPA wiring (commit `d7005d0` on current branch).
-- Operator live reads: dashboard aggregates, keyset-paginated run feed, full trace detail, tenant-timezone calendar.
-- Migration `000005`: `cancelled` job state for retired reminders.
+- **Code-review audit fixes (2026-07-23).** Resolved the defects recorded in [`ROADMAP.md`](../ROADMAP.md) "Code review — full audit":
+  - **D-1 (correctness):** the customer `reschedule_booking` / `cancel_booking` repository paths now run through the same serializable-retry loop and `mapDatabaseError` wrapper as `CreateBooking` and the Admin paths, so an overlapping-slot reschedule surfaces as `ErrSlotUnavailable` (not a misleadingly retryable dependency error) and transient serialization conflicts are retried.
+  - **D-2 (reliability):** the job queue now recovers stranded work. `jobqueue.Queue.RequeueStaleClaims` returns jobs stuck in `claimed` by a crashed/shut-down worker to `pending` (dead-lettering exhausted ones), the worker runs it on a timer, and terminal `Complete`/`Fail` writes use a shutdown-safe context so a finished job is never stranded.
+  - **D-3 (docs):** this status doc and the architecture map were refreshed.
+  - **D-4 (info-hygiene):** the demo HTTP handler no longer echoes raw `err.Error()` in responses. It gained an `internalError` helper (log + generic 500), the `getRun` bearer check now precedes the trace lookup (closing an error/existence leak to unauthenticated callers), and message-size rejections map to a 400 via the new `app.ErrInvalidMessage` sentinel.
+- Stage 6 multi-tenancy and identity: operator authentication (PBKDF2-SHA256), opaque database-backed sessions, owner/staff RBAC, host-based tenant resolution, tenant-scoped widget CORS, encrypted (AES-GCM, per-tenant AAD) channel secrets, and tenant onboarding routes.
+- Stage 7 first slice: opt-in Prometheus `/metrics` endpoint (`internal/platform/metrics`), secrets hardening (fail-closed on demo defaults outside demo mode), and CI vulnerability/SAST scanning.
 
 ## In progress
 
-- **Stage 6: multi-tenancy and identity** — partially implemented in working tree (not yet merged):
-  - `internal/identity/`: operator authentication (bcrypt), sessions (SHA-256 digest), middleware, password handling. Tests pass.
-  - `internal/tenants/`: tenant store with encrypted channel config, context helpers, mutations. Tests pass.
-  - `internal/channels/onboardinghttp/`: tenant provisioning and operator management routes. Tests pass.
-  - `internal/channels/tenanthttp/`: host-based tenant resolution middleware. **1 test failing** (`TestPublicTenantScopesEachHostToItsOwnTenant`).
-  - `internal/channels/telegram/multitenant.go`: multi-tenant webhook wiring.
-  - `internal/channels/demohttp/multitenant.go`: multi-tenant demo routes.
-  - `internal/channels/operatorhttp/multitenant.go`: multi-tenant operator store.
-  - Migration `000006_stage6_identity_tenants.sql`: operators, sessions, tenant_channels tables.
-  - `cmd/api/main.go`: updated to Stage 6 HTTP handler with identity middleware.
-  - Several new files have unformatted Go code (not yet `gofmt`-ed).
+- **Stage 7: production hardening and launch** — see [`ROADMAP.md`](../ROADMAP.md) Stage 7 and the "Release readiness" section for the remaining scope (shared-store rate limiting for horizontal scale, external calendar sync, real LLM/CRM/notification providers, tracing/alerting, backups/retention).
 
 ## Next actions
 
-1. Fix the failing `tenanthttp` middleware test (tenant context propagation issue).
-2. Format new Stage 6 files (`make fmt`).
-3. Complete multi-tenant Telegram webhook resolution.
-4. Wire operator login/logout through the onboarding handler end-to-end.
-5. Update CI smoke test for tenant-scoped routes.
-6. Merge Stage 6 to `main`.
+1. Add regression coverage for the audit fixes to the CI integration run (the new `internal/scheduling` reschedule-conflict and stale-claim tests require `TEST_DATABASE_URL`).
+2. Continue Stage 7: shared-store rate limiter, observability (tracing/alerting), and a documented rollback/restore procedure.
+3. Lock `HTTP_ALLOWED_ORIGIN` / per-tenant origins for any non-demo deployment.
 
 ## Blockers and open questions
 
-- `TestPublicTenantScopesEachHostToItsOwnTenant` fails — tenant not found in request context after middleware runs. Root cause not yet diagnosed.
-- Stage 6 scope decision: should tenant onboarding be self-service or admin-provisioned only for initial launch?
+- Stage 7 scope decision: minimum production observability (metrics only vs. metrics + tracing + alerting) for the first launch.
+- External calendar sync strategy (Google Calendar / Microsoft Graph) is still open.
 
 ## Verification status
 
 | Check | Result | Command / evidence | Last run |
 |---|---|---|---|
-| Format | Unformatted files exist (Stage 6 WIP) | `gofmt -l` | 2026-07-23 |
+| Format | pass (no unformatted files) | `gofmt -l` | 2026-07-23 |
 | Static analysis | pass | `go vet ./...` | 2026-07-23 |
-| Tests | 1 failure (`tenanthttp`) | `go test ./...` | 2026-07-23 |
+| Tests | pass | `go test ./...` | 2026-07-23 |
+| Tests (race) | pass | `go test -race -count=1 ./...` | 2026-07-23 |
 | Build (API) | pass | `go build ./cmd/api` | 2026-07-23 |
 | Build (Worker) | pass | `go build ./cmd/worker` | 2026-07-23 |
+| Integration | not run locally | needs `TEST_DATABASE_URL`; runs in CI | — |
 | E2E | not run locally | CI Compose smoke (runs on push) | — |
 
 ## Changed areas requiring attention
 
-- `internal/channels/tenanthttp/` — new middleware with failing test.
-- `cmd/api/main.go` — Stage 6 handler wiring; route structure changed.
-- `deploy/nginx/default.conf` — updated for tenant provisioning body size.
-- `compose.yaml` — new env vars for multi-tenancy and identity.
+- `internal/scheduling/repository.go` — customer reschedule/cancel now use the retry + `mapDatabaseError` wrapper (D-1).
+- `internal/jobqueue/postgres.go` and `cmd/worker/main.go` — stale-claim reaper and shutdown-safe terminal writes (D-2).
+- New integration tests under `internal/scheduling/` (`reschedule_conflict_integration_test.go`, `stale_claim_integration_test.go`) that require `TEST_DATABASE_URL`.
 
 ## Handoff notes
 
-- The working tree is on branch `stage5-operator-calendar-commands` but contains Stage 6 work (branch name is stale).
-- `main` branch (`f1f3f83`) is the last stable point with all tests passing.
-- All Stage 6 additions are uncommitted or in new untracked files.
+- The audit fixes are code-complete and pass local `vet`/`test`/`-race`; the two new integration tests could not be executed locally (no PostgreSQL/Docker available) and are expected to run in CI.
