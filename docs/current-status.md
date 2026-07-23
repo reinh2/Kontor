@@ -47,6 +47,16 @@
     (the D-1 audit fix), `isTransactionRetry`, `hashAdminCreateBooking`,
     `StableStaffOrder`, and `minutes` — previously reachable only through
     integration tests that need `TEST_DATABASE_URL`.
+  - **CI was already red before this work, and is now green.** The
+    `Security scanning` job's `govulncheck` step failed on the last two
+    pushes to `main`: `go.mod` pinned `go 1.25.0`, and CI resolves its
+    toolchain from that file, so the build ran on a Go release with 22
+    called standard-library vulnerabilities (`crypto/tls`, `crypto/x509`,
+    `encoding/pem`, and others), the newest of them fixed in `go1.25.12`.
+    The `go` directive is now `1.25.12`; `govulncheck ./...` reports no
+    vulnerabilities. No application code needed to change. The duplicate
+    `gofmt` step added to the new `lint` job was dropped, since the security
+    job already performs that check.
   - **`.gitignore` cleaned.** It listed `ROADMAP.md`, `AGENTS.md`,
     `CLAUDE.md`, and the `docs/*.md` context files, all of which are tracked;
     the contradictory entries were removed and the rest regrouped.
