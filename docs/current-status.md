@@ -13,6 +13,46 @@
 
 ## Recently completed
 
+- **Repository presentation and lint gate (2026-07-24).** A portfolio-facing
+  review of the repository found and fixed the following:
+  - **README screenshots were 404 on GitHub.** Commit `22c2d67` deleted
+    `docs/img/*.png` (13 files) alongside a `.gitignore` change while README
+    still referenced four of them, so the landing page rendered broken images.
+    The directory was restored from `22c2d67^`.
+  - **README restructured.** The entry point is now one screen — pitch, hero
+    trace image, a three-line quick start, and the safety argument. The
+    operational runbooks (tenant provisioning, configuration table, optional
+    integrations, legacy adoption) moved into `<details>` blocks, and a "How
+    this was built" section states that development was AI-assisted and names
+    the mechanisms used to stay in control of it. CI/Go/PostgreSQL/licence
+    badges added; the stale "deterministic demo or OpenRouter" wording now
+    reflects the fake/OpenAI/OpenRouter provider set.
+  - **`LICENSE` added (MIT).** The repository previously offered no licence,
+    which read as unfinished.
+  - **`golangci-lint` gate added.** `.golangci.yml` (v2 schema) enables the
+    standard set plus `bodyclose`, `errorlint`, `nilerr`, `rowserrcheck`,
+    `unconvert`, and `wastedassign`. A `lint` CI job runs it together with a
+    `gofmt` check; `make lint` and `make check` run it locally. `contextcheck`
+    is deliberately excluded (transaction rollback must use a fresh context by
+    design) and staticcheck's `QF*` quick-fixes are off. The initial run
+    surfaced 24 findings, all resolved: eight `fmt.Errorf` sites lost their
+    error cause to `%v` instead of `%w`; two idempotency-completion writes
+    discarded their error inside an empty `if` block and are now explicit
+    `_, _ =` assignments with the reasoning stated; two intentional
+    fail-closed paths carry `//nolint:nilerr` with an explanation; and the
+    OpenRouter transport-retry predicate no longer calls the deprecated and
+    ill-defined `net.Error.Temporary`.
+  - **Database-free coverage for the scheduling error seams.**
+    `internal/scheduling/repository_errors_test.go` pins `mapDatabaseError`
+    (the D-1 audit fix), `isTransactionRetry`, `hashAdminCreateBooking`,
+    `StableStaffOrder`, and `minutes` — previously reachable only through
+    integration tests that need `TEST_DATABASE_URL`.
+  - **`.gitignore` cleaned.** It listed `ROADMAP.md`, `AGENTS.md`,
+    `CLAUDE.md`, and the `docs/*.md` context files, all of which are tracked;
+    the contradictory entries were removed and the rest regrouped.
+  - Not done, and still the highest-value remaining work: a deployed live demo
+    and a short screen recording of a booking. Both need hosting and a capture
+    the repository cannot produce on its own.
 - **Hallucinated-service reply fix (2026-07-24).** A widget customer asking for
   "25 july colour on 09:00" received `I am sorry, "colour" is not a valid
   service. Please choose from the available services.` followed by an invented
@@ -205,12 +245,13 @@
 
 | Check | Result | Command / evidence | Last run |
 |---|---|---|---|
-| Format | pass (no unformatted files) | `gofmt -l` | 2026-07-23 |
-| Static analysis | pass | `go vet ./...` | 2026-07-23 |
-| Tests | pass | `go test ./...` | 2026-07-23 |
-| Tests (race) | pass | `go test -race ./...` | 2026-07-23 |
-| Build (API) | pass | `go build ./cmd/api` | 2026-07-23 |
-| Build (Worker) | pass | `go build ./cmd/worker` | 2026-07-23 |
+| Format | pass (no unformatted files) | `gofmt -l cmd internal db web` | 2026-07-24 |
+| Static analysis | pass | `go vet ./...` | 2026-07-24 |
+| Lint | pass (0 issues) | `golangci-lint run ./...` (v2.12.2) | 2026-07-24 |
+| Tests | pass | `go test ./...` | 2026-07-24 |
+| Tests (race) | pass | `go test -race -count=1 ./...` | 2026-07-24 |
+| Build (API) | pass | `go build ./cmd/api` | 2026-07-24 |
+| Build (Worker) | pass | `go build ./cmd/worker` | 2026-07-24 |
 | Embedded UI regression | pass | `go test ./web/operator ./web/widget`; `node --check` for both embedded scripts | 2026-07-23 |
 | Integration | not run locally | needs `TEST_DATABASE_URL`; runs in CI | — |
 | E2E | not run locally | CI Compose smoke (runs on push) | — |

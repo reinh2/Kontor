@@ -3,31 +3,22 @@
 .env.*
 !.env.example
 
-# Editor, cache, and log artifacts.
+# Build output.
+bin/
+/api
+/worker
+coverage.out
+*.test
+
+# Editor and OS artifacts.
 .DS_Store
 .idea/
 .vscode/
 .cache/
 tmp/
 *.log
+
+# Local tooling output (code-analysis and review runs).
 .kiro/
-ROADMAP.md
-ROADMAP_RU.md
-bin/
-/api
-/worker
-/semantic-review/
-coverage.out
-*.test
-
-# Generated code-analysis output
 graphify-out/
-
-# AI context documents (live on ai-context branch; local-only in working tree)
-AGENTS.md
-CLAUDE.md
-docs/product.md
-docs/architecture.md
-docs/coding-standards.md
-docs/decisions.md
-docs/current-status.md
+/semantic-review/
