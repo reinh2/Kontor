@@ -256,13 +256,15 @@ func (b *ToolBackend) RescheduleBooking(ctx context.Context, command toolapi.Res
 	if err != nil {
 		return toolapi.RescheduleBookingOutcome{}, mapToolBackendError(err)
 	}
+	booking := toolapi.Booking{
+		ID: result.Booking.ID, Status: result.Booking.Status,
+		ServiceID: result.Booking.ServiceID, StaffID: result.Booking.StaffID,
+		StartAt: result.Booking.StartsAt, EndAt: result.Booking.EndsAt,
+		Timezone: command.NewTimezone, Version: int64(result.Booking.ScheduleVersion),
+	}
+	b.enrichBookingNames(ctx, &booking, result.Booking.CustomerID)
 	return toolapi.RescheduleBookingOutcome{
-		Booking: toolapi.Booking{
-			ID: result.Booking.ID, Status: result.Booking.Status,
-			ServiceID: result.Booking.ServiceID, StaffID: result.Booking.StaffID,
-			StartAt: result.Booking.StartsAt, EndAt: result.Booking.EndsAt,
-			Timezone: command.NewTimezone, Version: int64(result.Booking.ScheduleVersion),
-		},
+		Booking:             booking,
 		IdempotencyReplayed: result.Replayed,
 	}, nil
 }
@@ -284,15 +286,34 @@ func (b *ToolBackend) CancelBooking(ctx context.Context, command toolapi.CancelB
 	if err != nil {
 		return toolapi.CancelBookingOutcome{}, mapToolBackendError(err)
 	}
+	booking := toolapi.Booking{
+		ID: result.Booking.ID, Status: result.Booking.Status,
+		ServiceID: result.Booking.ServiceID, StaffID: result.Booking.StaffID,
+		StartAt: result.Booking.StartsAt, EndAt: result.Booking.EndsAt,
+		Version: int64(result.Booking.ScheduleVersion),
+	}
+	b.enrichBookingNames(ctx, &booking, result.Booking.CustomerID)
 	return toolapi.CancelBookingOutcome{
-		Booking: toolapi.Booking{
-			ID: result.Booking.ID, Status: result.Booking.Status,
-			ServiceID: result.Booking.ServiceID, StaffID: result.Booking.StaffID,
-			StartAt: result.Booking.StartsAt, EndAt: result.Booking.EndsAt,
-			Version: int64(result.Booking.ScheduleVersion),
-		},
+		Booking:             booking,
 		IdempotencyReplayed: result.Replayed,
 	}, nil
+}
+
+// enrichBookingNames does a best-effort lookup of the human-readable service,
+// staff, and customer names for a reschedule/cancel outcome. The names are
+// informational for the model, so a lookup miss leaves them empty rather than
+// failing an already-committed mutation.
+func (b *ToolBackend) enrichBookingNames(ctx context.Context, booking *toolapi.Booking, customerID string) {
+	if b == nil || b.repository == nil || b.repository.pool == nil {
+		return
+	}
+	_ = b.repository.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE((SELECT name FROM services WHERE tenant_id = $1 AND id = $2), ''),
+			COALESCE((SELECT display_name FROM staff WHERE tenant_id = $1 AND id = $3), ''),
+			COALESCE((SELECT display_name FROM customers WHERE tenant_id = $1 AND id = $4), '')`,
+		b.repository.tenantID, booking.ServiceID, booking.StaffID, customerID).
+		Scan(&booking.ServiceName, &booking.StaffName, &booking.CustomerDisplayName)
 }
 
 func (b *ToolBackend) authorizeTenant(tenantID string) error {

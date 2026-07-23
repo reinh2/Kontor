@@ -160,6 +160,7 @@ func run() error {
 	}
 
 	limiter := httpx.NewRateLimiter(cfg.HTTP.RateLimitPerMinute, cfg.HTTP.RateLimitBurst)
+	limiter.SetTrustForwardedFor(cfg.HTTP.TrustForwardedFor)
 	registry := metrics.NewRegistry()
 	metrics.RegisterProcessInfo(registry, version)
 	httpMetrics := metrics.NewHTTP(registry)

@@ -33,19 +33,24 @@ func TestSecretCipherRoundTripAndTamperResistance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSecretCipher: %v", err)
 	}
-	ciphertext, nonce, err := cipher.seal("telegram-bot-token")
+	aad := channelAAD("00000000-0000-4000-8000-000000000001")
+	ciphertext, nonce, err := cipher.seal("telegram-bot-token", aad)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 	if string(ciphertext) == "telegram-bot-token" {
 		t.Fatal("secret was stored as plaintext")
 	}
-	plaintext, err := cipher.open(ciphertext, nonce)
+	plaintext, err := cipher.open(ciphertext, nonce, aad)
 	if err != nil || plaintext != "telegram-bot-token" {
 		t.Fatalf("open = %q, %v", plaintext, err)
 	}
+	// A ciphertext sealed for one tenant must not open under another tenant's AAD.
+	if _, err := cipher.open(ciphertext, nonce, channelAAD("00000000-0000-4000-8000-000000000002")); err == nil {
+		t.Fatal("ciphertext opened under a different tenant's AAD")
+	}
 	ciphertext[0] ^= 1
-	if _, err := cipher.open(ciphertext, nonce); err == nil {
+	if _, err := cipher.open(ciphertext, nonce, aad); err == nil {
 		t.Fatal("tampered ciphertext was accepted")
 	}
 }

@@ -275,3 +275,22 @@ func TestLoadAcceptsEnabledMetricsWithToken(t *testing.T) {
 		t.Fatalf("metrics token = %q", cfg.Metrics.Token)
 	}
 }
+
+func TestLoadRejectsDemoModeInProductionEnvironment(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	// DEMO_MODE is unset, so it falls back to its true default. A production
+	// APP_ENV must reject that rather than silently shipping the demo secrets.
+	if _, err := Load(); err == nil {
+		t.Fatal("expected demo mode in a production environment to fail")
+	}
+}
+
+func TestLoadAllowsExplicitNonDemoProductionEnvironment(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DEMO_MODE", "false")
+	t.Setenv("SLOT_TOKEN_SECRET", "slot-token-secret-0123456789abcdef01")
+	t.Setenv("TENANT_CHANNEL_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load with explicit non-demo production config: %v", err)
+	}
+}

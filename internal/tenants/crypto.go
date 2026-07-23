@@ -29,7 +29,10 @@ func newSecretCipher(key []byte) (*secretCipher, error) {
 	return &secretCipher{aead: aead}, nil
 }
 
-func (c *secretCipher) seal(value string) (ciphertext, nonce []byte, err error) {
+// seal encrypts value under the AEAD, binding the ciphertext to aad. Passing
+// the owning tenant's AAD means a stored secret copied into another tenant's
+// row fails authentication on open.
+func (c *secretCipher) seal(value string, aad []byte) (ciphertext, nonce []byte, err error) {
 	if c == nil || c.aead == nil {
 		return nil, nil, errors.New("tenant channels: encryption is not configured")
 	}
@@ -37,21 +40,29 @@ func (c *secretCipher) seal(value string) (ciphertext, nonce []byte, err error) 
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, nil, fmt.Errorf("tenant channels: generate nonce: %w", err)
 	}
-	return c.aead.Seal(nil, nonce, []byte(value), nil), nonce, nil
+	return c.aead.Seal(nil, nonce, []byte(value), aad), nonce, nil
 }
 
-func (c *secretCipher) open(ciphertext, nonce []byte) (string, error) {
+// open decrypts and authenticates a stored secret. aad must equal the value
+// supplied to seal (the owning tenant's AAD); otherwise authentication fails.
+func (c *secretCipher) open(ciphertext, nonce, aad []byte) (string, error) {
 	if c == nil || c.aead == nil {
 		return "", errors.New("tenant channels: encryption is not configured")
 	}
 	if len(nonce) != c.aead.NonceSize() || len(ciphertext) == 0 {
 		return "", errors.New("tenant channels: stored ciphertext is malformed")
 	}
-	plaintext, err := c.aead.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := c.aead.Open(nil, nonce, ciphertext, aad)
 	if err != nil {
 		return "", errors.New("tenant channels: decrypt stored secret")
 	}
 	return string(plaintext), nil
+}
+
+// channelAAD binds a sealed tenant channel secret to its tenant. A ciphertext
+// sealed for one tenant cannot be opened under another tenant's AAD.
+func channelAAD(tenantID string) []byte {
+	return []byte("kontor.tenant-channel.v1:" + tenantID)
 }
 
 func webhookDigest(secret string) [sha256.Size]byte { return sha256.Sum256([]byte(secret)) }

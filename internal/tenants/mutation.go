@@ -124,7 +124,7 @@ func (s *Store) UpdateChannels(ctx context.Context, tenantID string, input Chann
 		return ErrInvalidInput
 	}
 	input.WidgetOrigin = widgetOrigin
-	ciphertext, nonce, digest, err := s.prepareChannelConfig(input)
+	ciphertext, nonce, digest, err := s.prepareChannelConfig(input, tenantID)
 	if err != nil {
 		return err
 	}

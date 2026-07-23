@@ -72,7 +72,10 @@ func (s *Store) Provision(ctx context.Context, input ProvisionInput) (Tenant, er
 	if err := validateProvision(input); err != nil {
 		return Tenant{}, err
 	}
-	botCiphertext, botNonce, digest, err := s.prepareChannelConfig(input.Channels)
+	// Generate the tenant ID up front so the channel secret is sealed with this
+	// tenant's AAD before the row is inserted.
+	tenantID := ids.New()
+	botCiphertext, botNonce, digest, err := s.prepareChannelConfig(input.Channels, tenantID)
 	if err != nil {
 		return Tenant{}, err
 	}
@@ -83,7 +86,7 @@ func (s *Store) Provision(ctx context.Context, input ProvisionInput) (Tenant, er
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	tenant := Tenant{
-		ID: ids.New(), Slug: input.Slug, Name: strings.TrimSpace(input.Name),
+		ID: tenantID, Slug: input.Slug, Name: strings.TrimSpace(input.Name),
 		Timezone: input.Timezone, Currency: input.Currency, WidgetOrigin: input.Channels.WidgetOrigin,
 	}
 	err = tx.QueryRow(ctx, `
@@ -118,7 +121,7 @@ func (s *Store) Provision(ctx context.Context, input ProvisionInput) (Tenant, er
 	return tenant, nil
 }
 
-func (s *Store) prepareChannelConfig(config ChannelConfig) ([]byte, []byte, [sha256.Size]byte, error) {
+func (s *Store) prepareChannelConfig(config ChannelConfig, tenantID string) ([]byte, []byte, [sha256.Size]byte, error) {
 	if !config.TelegramEnabled {
 		if config.TelegramBotToken != "" || config.TelegramWebhookSecret != "" {
 			return nil, nil, [sha256.Size]byte{}, ErrInvalidInput
@@ -129,7 +132,7 @@ func (s *Store) prepareChannelConfig(config ChannelConfig) ([]byte, []byte, [sha
 		len(config.TelegramWebhookSecret) < 16 || len(config.TelegramWebhookSecret) > 256 {
 		return nil, nil, [sha256.Size]byte{}, ErrInvalidInput
 	}
-	ciphertext, nonce, err := s.cipher.seal(config.TelegramBotToken)
+	ciphertext, nonce, err := s.cipher.seal(config.TelegramBotToken, channelAAD(tenantID))
 	if err != nil {
 		return nil, nil, [sha256.Size]byte{}, err
 	}
@@ -376,7 +379,7 @@ func (s *Store) TelegramCredentials(ctx context.Context, tenantID string) (Teleg
 	if !enabled {
 		return TelegramCredentials{}, ErrChannelDisabled
 	}
-	botToken, err := s.cipher.open(ciphertext, nonce)
+	botToken, err := s.cipher.open(ciphertext, nonce, channelAAD(tenantID))
 	if err != nil {
 		return TelegramCredentials{}, err
 	}

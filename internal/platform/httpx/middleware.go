@@ -42,13 +42,14 @@ func CORS(allowedOrigin string, next http.Handler) http.Handler {
 // admission queue from a single noisy client; the queue itself remains the
 // backstop for aggregate overload.
 type RateLimiter struct {
-	mu          sync.Mutex
-	buckets     map[string]*bucket
-	perMinute   float64
-	burst       float64
-	lastCleanup time.Time
-	now         func() time.Time
-	onReject    func()
+	mu                sync.Mutex
+	buckets           map[string]*bucket
+	perMinute         float64
+	burst             float64
+	lastCleanup       time.Time
+	now               func() time.Time
+	onReject          func()
+	trustForwardedFor bool
 }
 
 type bucket struct {
@@ -64,10 +65,11 @@ func NewRateLimiter(perMinute, burst int) *RateLimiter {
 		burst = 1
 	}
 	return &RateLimiter{
-		buckets:   make(map[string]*bucket),
-		perMinute: float64(perMinute),
-		burst:     float64(burst),
-		now:       time.Now,
+		buckets:           make(map[string]*bucket),
+		perMinute:         float64(perMinute),
+		burst:             float64(burst),
+		now:               time.Now,
+		trustForwardedFor: true,
 	}
 }
 
@@ -75,6 +77,13 @@ func NewRateLimiter(perMinute, burst int) *RateLimiter {
 // the caller observe rate-limit rejections (e.g. a metrics counter) without
 // this package depending on the metrics registry. A nil hook is ignored.
 func (l *RateLimiter) SetOnReject(hook func()) { l.onReject = hook }
+
+// SetTrustForwardedFor controls how the limiter identifies a client. When true
+// (the default, correct behind a trusted proxy) it keys on the first
+// X-Forwarded-For hop; when false it always keys on the socket address, so a
+// directly reachable service cannot be tricked into per-IP-limit evasion by a
+// spoofed header.
+func (l *RateLimiter) SetTrustForwardedFor(trust bool) { l.trustForwardedFor = trust }
 
 // Middleware enforces the limit for every request except liveness and
 // readiness probes. Rejections are controlled 429 responses with Retry-After,
@@ -85,7 +94,7 @@ func (l *RateLimiter) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !l.allow(clientKey(r)) {
+		if !l.allow(l.clientKey(r)) {
 			if l.onReject != nil {
 				l.onReject()
 			}
@@ -132,14 +141,18 @@ func (l *RateLimiter) allow(key string) bool {
 	return true
 }
 
-// clientKey prefers the first X-Forwarded-For hop because the container
-// always sits behind the bundled nginx proxy; a direct caller falls back to
-// the socket address.
-func clientKey(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		first := strings.TrimSpace(strings.Split(forwarded, ",")[0])
-		if first != "" {
-			return first
+// clientKey identifies the calling client. When the limiter is configured to
+// trust the proxy (the default, because the container sits behind the bundled
+// nginx), it prefers the first X-Forwarded-For hop. Otherwise, or when no hop
+// is present, it falls back to the socket address, so a directly reachable
+// service cannot be tricked into limit evasion by a spoofed header.
+func (l *RateLimiter) clientKey(r *http.Request) string {
+	if l.trustForwardedFor {
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			first := strings.TrimSpace(strings.Split(forwarded, ",")[0])
+			if first != "" {
+				return first
+			}
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)

@@ -45,7 +45,7 @@ func (s *Store) BootstrapLegacyTenant(ctx context.Context, input LegacyBootstrap
 	if displayName == "" || len(displayName) > 200 {
 		return LegacyBootstrapResult{}, ErrLegacyBootstrapIneligible
 	}
-	ciphertext, nonce, digest, err := s.prepareChannelConfig(input.Telegram)
+	ciphertext, nonce, digest, err := s.prepareChannelConfig(input.Telegram, input.TenantID)
 	if err != nil {
 		return LegacyBootstrapResult{}, ErrLegacyBootstrapIneligible
 	}
@@ -101,7 +101,7 @@ func (s *Store) BootstrapLegacyTenant(ctx context.Context, input LegacyBootstrap
 		return LegacyBootstrapResult{Applied: true}, nil
 	}
 
-	if operatorCount == 1 && s.legacyChannelsMatchInput(channels, widgetOrigin, input.Telegram, digest) {
+	if operatorCount == 1 && s.legacyChannelsMatchInput(channels, input.TenantID, widgetOrigin, input.Telegram, digest) {
 		var storedEmail, storedName, storedRole, passwordHash string
 		var active bool
 		err := tx.QueryRow(ctx, `
@@ -125,7 +125,7 @@ func legacyChannelsPristine(channels legacyChannelState) bool {
 	return channels.widgetOrigin == "" && !channels.enabled && len(channels.ciphertext) == 0 && len(channels.nonce) == 0 && len(channels.secretDigest) == 0
 }
 
-func (s *Store) legacyChannelsMatchInput(channels legacyChannelState, origin string, input ChannelConfig, digest [32]byte) bool {
+func (s *Store) legacyChannelsMatchInput(channels legacyChannelState, tenantID, origin string, input ChannelConfig, digest [32]byte) bool {
 	if channels.widgetOrigin != origin || channels.enabled != input.TelegramEnabled {
 		return false
 	}
@@ -135,6 +135,6 @@ func (s *Store) legacyChannelsMatchInput(channels legacyChannelState, origin str
 	if len(channels.ciphertext) == 0 || len(channels.nonce) == 0 || !bytes.Equal(channels.secretDigest, digest[:]) {
 		return false
 	}
-	botToken, err := s.cipher.open(channels.ciphertext, channels.nonce)
+	botToken, err := s.cipher.open(channels.ciphertext, channels.nonce, channelAAD(tenantID))
 	return err == nil && botToken == input.TelegramBotToken
 }

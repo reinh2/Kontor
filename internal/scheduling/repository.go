@@ -425,15 +425,22 @@ func (r *PGXRepository) RescheduleBooking(ctx context.Context, request Reschedul
 			return RescheduleBookingResult{}, fmt.Errorf("reserve idempotency key: %w", err)
 		}
 		if tag.RowsAffected() == 0 {
-			// Idempotent replay: load and return the booking.
-			var resourceID string
-			err = tx.QueryRow(ctx, `
-				SELECT COALESCE(resource_id::text, '')
+			// A reused idempotency key must carry identical arguments. Reject a
+			// mismatch instead of silently replaying the earlier reschedule.
+			var storedHash, status, resourceID string
+			if err := tx.QueryRow(ctx, `
+				SELECT request_hash, status, COALESCE(resource_id::text, '')
 				FROM idempotency_records
-				WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3 AND status = 'completed'
-				FOR UPDATE`, r.tenantID, idempotencyScope, request.IdempotencyKey).Scan(&resourceID)
-			if err != nil || resourceID == "" {
-				return RescheduleBookingResult{}, fmt.Errorf("idempotency record incomplete for reschedule")
+				WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3
+				FOR UPDATE`, r.tenantID, idempotencyScope, request.IdempotencyKey).
+				Scan(&storedHash, &status, &resourceID); err != nil {
+				return RescheduleBookingResult{}, fmt.Errorf("read idempotency key: %w", err)
+			}
+			if storedHash != requestHash {
+				return RescheduleBookingResult{}, ErrIdempotencyConflict
+			}
+			if status != "completed" || resourceID == "" {
+				return RescheduleBookingResult{}, fmt.Errorf("idempotency record is unexpectedly incomplete")
 			}
 			booking, loadErr := loadBooking(ctx, tx, r.tenantID, resourceID)
 			if loadErr != nil {
@@ -511,6 +518,13 @@ func (r *PGXRepository) RescheduleBooking(ctx context.Context, request Reschedul
 		return RescheduleBookingResult{}, fmt.Errorf("insert reschedule event: %w", err)
 	}
 
+	// Move the still-pending reminder to the new time so it never fires for the
+	// old slot. request.Timezone carries the staff/slot IANA timezone that the
+	// gateway validated when it signed the slot token. Mirrors the operator path.
+	if _, err := jobqueue.UpdateReminderSchedule(ctx, tx, r.tenantID, updated.ID, updated.StartsAt, request.Timezone); err != nil {
+		return RescheduleBookingResult{}, err
+	}
+
 	// Complete idempotency record.
 	if request.IdempotencyKey != "" {
 		if _, err := tx.Exec(ctx, `
@@ -558,14 +572,22 @@ func (r *PGXRepository) CancelBooking(ctx context.Context, request CancelBooking
 			return CancelBookingResult{}, fmt.Errorf("reserve idempotency key: %w", err)
 		}
 		if tag.RowsAffected() == 0 {
-			var resourceID string
-			err = tx.QueryRow(ctx, `
-				SELECT COALESCE(resource_id::text, '')
+			// A reused idempotency key must carry identical arguments. Reject a
+			// mismatch instead of silently replaying the earlier cancellation.
+			var storedHash, status, resourceID string
+			if err := tx.QueryRow(ctx, `
+				SELECT request_hash, status, COALESCE(resource_id::text, '')
 				FROM idempotency_records
-				WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3 AND status = 'completed'
-				FOR UPDATE`, r.tenantID, idempotencyScope, request.IdempotencyKey).Scan(&resourceID)
-			if err != nil || resourceID == "" {
-				return CancelBookingResult{}, fmt.Errorf("idempotency record incomplete for cancel")
+				WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3
+				FOR UPDATE`, r.tenantID, idempotencyScope, request.IdempotencyKey).
+				Scan(&storedHash, &status, &resourceID); err != nil {
+				return CancelBookingResult{}, fmt.Errorf("read idempotency key: %w", err)
+			}
+			if storedHash != requestHash {
+				return CancelBookingResult{}, ErrIdempotencyConflict
+			}
+			if status != "completed" || resourceID == "" {
+				return CancelBookingResult{}, fmt.Errorf("idempotency record is unexpectedly incomplete")
 			}
 			booking, loadErr := loadBooking(ctx, tx, r.tenantID, resourceID)
 			if loadErr != nil {
@@ -637,6 +659,12 @@ func (r *PGXRepository) CancelBooking(ctx context.Context, request CancelBooking
 		return CancelBookingResult{}, fmt.Errorf("insert cancel event: %w", err)
 	}
 
+	// Retire the still-pending reminder so it never fires for a cancelled
+	// booking (mirrors the operator cancel path).
+	if _, err := jobqueue.CancelBookingJobs(ctx, tx, r.tenantID, cancelled.ID, "send_reminder"); err != nil {
+		return CancelBookingResult{}, err
+	}
+
 	// Complete idempotency record.
 	if request.IdempotencyKey != "" {
 		if _, err := tx.Exec(ctx, `
@@ -658,9 +686,22 @@ func (r *PGXRepository) CancelBooking(ctx context.Context, request CancelBooking
 // spawned by a newly created booking. It is shared by the customer agent path
 // and the operator (admin) path so both produce an identical outbox.
 func (r *PGXRepository) enqueueBookingCreatedJobs(ctx context.Context, tx pgx.Tx, booking Booking, serviceName, staffName, staffTimezone string) error {
+	// Load the customer's real contact details so a reminder has a deliverable
+	// destination and the CRM contact carries a human-readable name instead of
+	// the internal customer UUID. The customer row is guaranteed to exist: the
+	// booking insert above holds a foreign key to it.
+	var customerName, customerEmail, customerPhone string
+	if err := tx.QueryRow(ctx, `
+		SELECT display_name, COALESCE(email, ''), COALESCE(phone, '')
+		FROM customers
+		WHERE tenant_id = $1 AND id = $2`, r.tenantID, booking.CustomerID).
+		Scan(&customerName, &customerEmail, &customerPhone); err != nil {
+		return fmt.Errorf("load customer for booking jobs: %w", err)
+	}
 	reminderPayload, _ := json.Marshal(map[string]string{
-		"customer_name":  booking.CustomerID,
-		"customer_email": "",
+		"customer_name":  customerName,
+		"customer_email": customerEmail,
+		"customer_phone": customerPhone,
 		"service_name":   serviceName,
 		"staff_name":     staffName,
 		"starts_at":      booking.StartsAt.Format(time.RFC3339),
@@ -668,7 +709,9 @@ func (r *PGXRepository) enqueueBookingCreatedJobs(ctx context.Context, tx pgx.Tx
 	})
 	crmPayload, _ := json.Marshal(map[string]string{
 		"customer_id":  booking.CustomerID,
-		"display_name": booking.CustomerID,
+		"display_name": customerName,
+		"email":        customerEmail,
+		"phone":        customerPhone,
 	})
 	for _, job := range []struct {
 		jobType        string

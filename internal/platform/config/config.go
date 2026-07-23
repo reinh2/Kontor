@@ -59,6 +59,12 @@ type HTTP struct {
 	AllowedOrigin      string
 	RateLimitPerMinute int
 	RateLimitBurst     int
+	// TrustForwardedFor lets the per-IP rate limiter key on the first
+	// X-Forwarded-For hop. It defaults to true because the shipped topology puts
+	// the service behind the bundled nginx proxy. Set it to false when the
+	// service can be reached directly, so a client cannot spoof the header to
+	// evade the per-IP limit; the limiter then keys on the socket address.
+	TrustForwardedFor bool
 }
 
 type Tenant struct {
@@ -168,6 +174,7 @@ func Load() (Config, error) {
 			AllowedOrigin:      env("HTTP_ALLOWED_ORIGIN", "*"),
 			RateLimitPerMinute: envInt("HTTP_RATE_LIMIT_PER_MINUTE", 60),
 			RateLimitBurst:     envInt("HTTP_RATE_LIMIT_BURST", 20),
+			TrustForwardedFor:  envBool("HTTP_TRUST_FORWARDED_FOR", true),
 		},
 		Metrics: Metrics{
 			Enabled: envBool("METRICS_ENABLED", false),
@@ -235,6 +242,14 @@ func Load() (Config, error) {
 	if len(cfg.SlotTokenSecret) < 32 {
 		return Config{}, errors.New("SLOT_TOKEN_SECRET must contain at least 32 bytes")
 	}
+	// A production APP_ENV must never run in demo mode. Demo mode seeds the
+	// fixed demo tenant/owner and, more importantly, skips the fail-closed
+	// demo-secret checks below. Because DEMO_MODE defaults to true, a production
+	// deploy that forgets to set DEMO_MODE=false would otherwise silently ship
+	// the public demo secrets; force an explicit choice instead.
+	if cfg.DemoMode && isProductionEnvironment(cfg.Environment) {
+		return Config{}, errors.New("DEMO_MODE must be false when APP_ENV is a production environment")
+	}
 	// Fail closed on the public demo secrets outside demo mode. These values
 	// ship in compose.yaml and .env.example, so accepting them in a real
 	// deployment would sign slot tokens and encrypt tenant channel secrets with
@@ -274,6 +289,17 @@ func Load() (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// isProductionEnvironment reports whether APP_ENV names a production-like
+// environment where demo defaults must never apply.
+func isProductionEnvironment(environment string) bool {
+	switch strings.ToLower(strings.TrimSpace(environment)) {
+	case "production", "prod":
+		return true
+	default:
+		return false
+	}
 }
 
 func validDNSSuffix(value string) bool {

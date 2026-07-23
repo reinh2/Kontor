@@ -119,18 +119,12 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fresh, err := h.claimUpdate(r.Context(), payload.UpdateID)
-	if err != nil {
-		// The claim failed before any work; a retry is safe and desirable.
-		h.logger.Error("telegram update claim failed", "update_id", payload.UpdateID, "error", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	if !fresh {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
+	// Resolve (and, on first contact, create) the tenant-scoped conversation
+	// before claiming the update. A mapping failure must return 500 *before* the
+	// dedupe row is committed so Telegram can redeliver; otherwise a transient
+	// error would claim the update and silently drop the customer's message.
+	// EnsureChannelConversation is idempotent, so re-resolving a redelivered
+	// update is harmless.
 	chatID := payload.Message.Chat.ID
 	conversation, err := h.store.EnsureChannelConversation(
 		r.Context(), h.config.TenantID, "telegram", strconv.FormatInt(chatID, 10),
@@ -138,6 +132,18 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.logger.Error("telegram conversation mapping failed", "update_id", payload.UpdateID, "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	fresh, err := h.claimUpdate(r.Context(), payload.UpdateID)
+	if err != nil {
+		// The claim failed before any turn ran; a retry is safe and desirable.
+		h.logger.Error("telegram update claim failed", "update_id", payload.UpdateID, "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if !fresh {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
