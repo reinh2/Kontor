@@ -13,6 +13,47 @@
 
 ## Recently completed
 
+- **CI-only integration failures resolved (2026-07-24).** `Stage 1
+  verification` had been red on `main` since `22c2d67`. The failures were
+  invisible locally because the integration tests skip without
+  `TEST_DATABASE_URL`; they were reproduced against a local PostgreSQL 15
+  container and fixed.
+  - **A confirmed booking could strand the customer's consent (product
+    regression, `f9d18e4`).** `confirmations.Latest` reports a proposal the
+    customer already approved — stored as `confirmed` — with the status
+    `authorized`. `f9d18e4` narrowed the service's exposure check from
+    `pending || authorized` to `pending` alone. When the customer said "yes"
+    and the model then failed to execute the authorized call, the proposal
+    stayed `confirmed` in the database but vanished from the turn result and
+    the widget: the consent was live, and the customer had no card to retry
+    from. The `authorized` status is exposed again, with the reasoning stated
+    at the call site. Covered by
+    `TestStage1AuthorizedConfirmationCanBeRetriedAfterModelIgnoresIt`.
+  - **A stale test, not a defect: sibling refusal.**
+    `TestStage1CommittedBookingThenSiblingRefusalAcknowledgesBookingAndHandoff`
+    simulated a server policy refusal with an *unregistered* tool name. Since
+    the recoverable tool-name change, an unknown name is a planning error the
+    model can correct, not a terminal hand-off — so the batch no longer
+    refused, no `tool_refused` escalation was written, and the turn escalated
+    through the post-commit path instead. The test now drives a registered
+    tool whose executor returns `ToolStatusRefused`, which is what a real
+    gateway ownership refusal looks like.
+  - **A test asserted on JSON whitespace.**
+    `TestStage1ClarificationTurnInvalidatesOldPendingConfirmationSnapshot`
+    (new in `f9d18e4`) matched the substring
+    `"pending_confirmation_active":false` against a payload built by
+    `jsonb_build_object`, which renders a space after the colon. The behaviour
+    was correct all along; the assertion now decodes the payload.
+  - **Parallel test packages raced inside `CREATE EXTENSION`.**
+    `database.ApplyMigrations` serializes on an advisory lock, but five
+    integration helpers executed the migration files directly and bypassed it.
+    `CREATE EXTENSION IF NOT EXISTS` is not atomic in PostgreSQL, so two
+    packages building their private schemas at the same moment could both pass
+    the existence check and collide on `pg_extension_name_index` — reproduced
+    in 2 of 6 runs against a clean database. All five helpers now go through
+    `ApplyMigrations`, which also removes five copies of the loop; 0 of 8 runs
+    failed afterwards.
+
 - **Repository presentation and lint gate (2026-07-24).** A portfolio-facing
   review of the repository found and fixed the following:
   - **README screenshots were 404 on GitHub.** Commit `22c2d67` deleted
@@ -214,10 +255,11 @@
 
 ## Next actions
 
-1. Add regression coverage for the audit fixes to the CI integration run (the new `internal/scheduling` reschedule-conflict and stale-claim tests require `TEST_DATABASE_URL`).
-2. Continue Stage 7: shared-store rate limiter, observability (tracing/alerting), and a documented rollback/restore procedure.
-3. Lock `HTTP_ALLOWED_ORIGIN` / per-tenant origins for any non-demo deployment.
-4. Build and gate provider/model changes on the versioned multilingual real-model booking evaluation suite recorded in `ROADMAP.md`.
+1. Run the integration suite locally before every push — a PostgreSQL 15 container plus `TEST_DATABASE_URL` is enough. Three defects reached `main` because these tests only ran in CI and CI was already red.
+2. Deploy a live demo (fake adapter, no API key) and link it from the README; record a short booking screencast to replace the static hero image.
+3. Continue Stage 7: shared-store rate limiter, observability (tracing/alerting), and a documented rollback/restore procedure.
+4. Lock `HTTP_ALLOWED_ORIGIN` / per-tenant origins for any non-demo deployment.
+5. Build and gate provider/model changes on the versioned multilingual real-model booking evaluation suite recorded in `ROADMAP.md`.
 
 ## Blockers and open questions
 
@@ -263,7 +305,7 @@
 | Build (API) | pass | `go build ./cmd/api` | 2026-07-24 |
 | Build (Worker) | pass | `go build ./cmd/worker` | 2026-07-24 |
 | Embedded UI regression | pass | `go test ./web/operator ./web/widget`; `node --check` for both embedded scripts | 2026-07-23 |
-| Integration | not run locally | needs `TEST_DATABASE_URL`; runs in CI | — |
+| Integration | pass | `TEST_DATABASE_URL=… go test -race -count=1 ./...` against PostgreSQL 15 in Docker | 2026-07-24 |
 | E2E | not run locally | CI Compose smoke (runs on push) | — |
 
 ## Changed areas requiring attention
@@ -277,4 +319,9 @@
 
 ## Handoff notes
 
-- The audit fixes are code-complete and pass local `vet`/`test`/`-race`; the two new integration tests could not be executed locally (no PostgreSQL/Docker available) and are expected to run in CI.
+- The integration suite now runs locally. Start a PostgreSQL 15 container and
+  export `TEST_DATABASE_URL`; `go test -race -count=1 ./...` then executes the
+  integration tests instead of skipping them. Doing this before a push is what
+  would have caught the three defects above.
+- The only CI step still unexercised locally is the Compose smoke test, which
+  needs the full stack.

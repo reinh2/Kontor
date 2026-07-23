@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"io/fs"
 	"os"
 	"testing"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/reinhlord/kontor/db/migrations"
 	"github.com/reinhlord/kontor/internal/agent"
+	"github.com/reinhlord/kontor/internal/platform/database"
 )
 
 const executorTestTenant = "00000000-0000-4000-8000-000000000001"
@@ -105,18 +105,13 @@ func executorIntegrationPool(t *testing.T) *pgxpool.Pool {
 		admin.Close()
 	})
 
-	names, err := fs.Glob(migrations.Files, "*.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range names {
-		migration, err := migrations.Files.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, string(migration)); err != nil {
-			t.Fatalf("apply migration %s: %v", name, err)
-		}
+	// Apply through the shared runner rather than executing the files
+	// directly: it holds the migration advisory lock, so packages building
+	// their private schemas in parallel cannot race each other inside
+	// CREATE EXTENSION, which PostgreSQL does not make atomic even with
+	// IF NOT EXISTS.
+	if err := database.ApplyMigrations(ctx, pool, migrations.Files, "."); err != nil {
+		t.Fatalf("apply migrations: %v", err)
 	}
 	return pool
 }

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"os"
 	"strings"
@@ -31,6 +30,7 @@ import (
 	"github.com/reinhlord/kontor/internal/demo"
 	"github.com/reinhlord/kontor/internal/llm"
 	"github.com/reinhlord/kontor/internal/platform/config"
+	"github.com/reinhlord/kontor/internal/platform/database"
 	"github.com/reinhlord/kontor/internal/scheduling"
 	"github.com/reinhlord/kontor/internal/tools"
 )
@@ -962,8 +962,8 @@ func TestStage1CommittedBookingThenSiblingRefusalAcknowledgesBookingAndHandoff(t
 	model := llm.NewFakeAdapter(llm.FakeStep{Response: llm.Response{
 		Model: "fake/committed-handoff", FinishReason: "tool_calls", Usage: llm.Usage{TotalTokens: 10},
 		Message: llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
-			{ID: "committed-handoff-create", Name: "create_booking", Arguments: []byte(`{}`)},
-			{ID: "committed-handoff-refused", Name: "delete_another_customers_booking", Arguments: []byte(`{}`)},
+			{ID: "committed-handoff-create", Name: tools.ToolCreateBooking, Arguments: []byte(`{}`)},
+			{ID: "committed-handoff-refused", Name: tools.ToolCancel, Arguments: []byte(`{}`)},
 		}},
 	}})
 	application := newCommittedBookingTestApplication(t, pool, cfg, model)
@@ -1140,8 +1140,23 @@ func TestStage1ClarificationTurnInvalidatesOldPendingConfirmationSnapshot(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || !strings.Contains(string(events[0].Payload), `"pending_confirmation_active":false`) {
-		t.Fatalf("clarification event does not clear pending UI state: %#v", events)
+	if len(events) != 1 {
+		t.Fatalf("clarification wrote %d events, want 1: %#v", len(events), events)
+	}
+	// Decode rather than match on the serialized text: the payload is built by
+	// jsonb_build_object, whose rendering (a space after each colon) is not part
+	// of the contract the widget relies on.
+	var snapshot struct {
+		PendingConfirmationActive *bool `json:"pending_confirmation_active"`
+	}
+	if err := json.Unmarshal(events[0].Payload, &snapshot); err != nil {
+		t.Fatalf("decode clarification event payload: %v (%s)", err, events[0].Payload)
+	}
+	if snapshot.PendingConfirmationActive == nil {
+		t.Fatalf("clarification event omits pending_confirmation_active: %s", events[0].Payload)
+	}
+	if *snapshot.PendingConfirmationActive {
+		t.Fatalf("clarification event does not clear pending UI state: %s", events[0].Payload)
 	}
 }
 
@@ -1167,14 +1182,25 @@ func terminalModelStep(id, message string, disposition tools.CustomerResponseDis
 type committedBookingExecutor struct{}
 
 func (committedBookingExecutor) Execute(_ context.Context, request agent.ToolRequest) (agent.ToolExecution, error) {
-	if request.Call.Name != "create_booking" {
+	switch request.Call.Name {
+	case tools.ToolCreateBooking:
+		return agent.ToolExecution{
+			Content:             []byte(`{"status":"success","booking":{"id":"booking-is-durable"}}`),
+			Status:              agent.ToolStatusSucceeded,
+			SideEffectCommitted: true,
+		}, nil
+	case tools.ToolCancel:
+		// Stands in for a gateway ownership refusal: the tool is registered and
+		// the call is well formed, but the server boundary declines it. Unlike
+		// an unregistered tool name — a recoverable planning error — a refusal
+		// is a terminal human hand-off.
+		return agent.ToolExecution{
+			Content: []byte(`{"status":"error","error":{"code":"NOT_FOUND_OR_NOT_OWNED"}}`),
+			Status:  agent.ToolStatusRefused,
+		}, nil
+	default:
 		return agent.ToolExecution{}, fmt.Errorf("unexpected tool %q", request.Call.Name)
 	}
-	return agent.ToolExecution{
-		Content:             []byte(`{"status":"success","booking":{"id":"booking-is-durable"}}`),
-		Status:              agent.ToolStatusSucceeded,
-		SideEffectCommitted: true,
-	}, nil
 }
 
 type saveFirstFailureAdapter struct {
@@ -1291,18 +1317,13 @@ func stage1IntegrationPool(t *testing.T) *pgxpool.Pool {
 		admin.Close()
 	})
 
-	names, err := fs.Glob(migrations.Files, "*.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range names {
-		migration, err := migrations.Files.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, string(migration)); err != nil {
-			t.Fatalf("apply migration %s: %v", name, err)
-		}
+	// Apply through the shared runner rather than executing the files
+	// directly: it holds the migration advisory lock, so packages building
+	// their private schemas in parallel cannot race each other inside
+	// CREATE EXTENSION, which PostgreSQL does not make atomic even with
+	// IF NOT EXISTS.
+	if err := database.ApplyMigrations(ctx, pool, migrations.Files, "."); err != nil {
+		t.Fatalf("apply migrations: %v", err)
 	}
 	return pool
 }
