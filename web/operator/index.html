@@ -200,6 +200,22 @@
     .mobile-nav { display: none; gap: var(--space-1); padding: var(--space-2); overflow-x: auto; border-bottom: 1px solid var(--border-subtle); background: var(--surface-1); }
     .mobile-nav .nav-item { width: auto; flex: 0 0 auto; }
 
+    /* Inbox, analytics, and settings reuse the same token-based card language
+       as the imported Claude Design specimens. */
+    .section-heading { margin: 0 0 var(--space-1); font-size: var(--fs-h2); font-weight: var(--fw-semibold); letter-spacing: -.02em; }
+    .section-description { margin: 0 0 var(--space-5); color: var(--text-secondary); }
+    .inbox-list, .settings-stack { display: grid; gap: var(--space-3); }
+    .inbox-item, .settings-card { background: var(--surface-1); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: var(--space-4); }
+    .inbox-item { display: flex; align-items: flex-start; gap: var(--space-3); text-decoration: none; color: inherit; transition: var(--transition-colors); }
+    .inbox-item:hover { background: var(--surface-hover); }
+    .inbox-item:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+    .inbox-marker { width: 10px; height: 10px; flex: 0 0 auto; margin-top: 6px; border-radius: var(--radius-full); background: var(--status-warning-fg); }
+    .inbox-title { display: block; font-size: var(--fs-body); font-weight: var(--fw-semibold); color: var(--text-primary); }
+    .inbox-meta { display: block; margin-top: var(--space-1); color: var(--text-tertiary); font-size: var(--fs-caption); }
+    .analytics-grid { display: grid; grid-template-columns: 2fr 1fr; gap: var(--space-4); }
+    .settings-card h2 { margin: 0 0 var(--space-3); font-size: var(--fs-body-lg); }
+    .settings-note { margin: var(--space-3) 0 0; color: var(--text-secondary); font-size: var(--fs-body-sm); }
+
     /* Bottom dashboard sections */
     .bottom-row { display: grid; grid-template-columns: 2fr 1fr; gap: var(--space-4); margin-top: var(--space-5); }
     .bottom-row .attention-panel { margin-top: 0; }
@@ -220,6 +236,7 @@
       .kpi-grid { grid-template-columns: repeat(2, 1fr); }
       .charts-row { grid-template-columns: 1fr; }
       .bottom-row { grid-template-columns: 1fr; }
+      .analytics-grid { grid-template-columns: 1fr; }
       .filter-bar { grid-template-columns: 1fr 1fr; }
     }
     @media (max-width: 430px) {
@@ -550,6 +567,8 @@ function Icon(props) {
     dashboard: 'M3 3h7v7H3V3zm11 0h7v7h-7V3zm0 11h7v7h-7v-7zM3 14h7v7H3v-7z',
     runs: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9h6m-6 4h6m-6-8h2',
     calendar: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
+    inbox: 'M21 15a4 4 0 01-4 4H7l-4 3V7a4 4 0 014-4h10a4 4 0 014 4zM8 9h8m-8 4h5',
+    analytics: 'M4 19V9m5 10V5m5 14v-7m5 7V3',
     settings: 'M12 15a3 3 0 100-6 3 3 0 000 6z M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z',
     chevronLeft: 'M15 18l-6-6 6-6',
     chevronRight: 'M9 18l6-6-6-6'
@@ -562,9 +581,12 @@ function Icon(props) {
 // ── Components ────────────────────────────────────────────────────────────────
 
 var NAV_ITEMS = [
-  { key: 'dashboard', label: 'Dashboard', icon: 'dashboard', hash: '#/' },
+  { key: 'dashboard', label: 'Overview', icon: 'dashboard', hash: '#/overview' },
   { key: 'runs', label: 'Runs', icon: 'runs', hash: '#/runs' },
-  { key: 'calendar', label: 'Calendar', icon: 'calendar', hash: '#/calendar' }
+  { key: 'calendar', label: 'Calendar', icon: 'calendar', hash: '#/calendar' },
+  { key: 'inbox', label: 'Inbox', icon: 'inbox', hash: '#/inbox' },
+  { key: 'analytics', label: 'Analytics', icon: 'analytics', hash: '#/analytics' },
+  { key: 'settings', label: 'Settings', icon: 'settings', hash: '#/settings' }
 ];
 
 function NavLinks(props) {
@@ -605,14 +627,14 @@ function MobileNav(props) {
 }
 
 function Topbar(props) {
-  var titles = { dashboard: 'Dashboard', runs: 'Runs', trace: 'Agent Trace', calendar: 'Calendar' };
+  var titles = { dashboard: 'Overview', runs: 'Runs', trace: 'Agent Trace', calendar: 'Calendar', inbox: 'Inbox', analytics: 'Analytics', settings: 'Settings' };
   return h('header', { className: 'topbar' },
     h('div', { className: 'topbar-left' },
       h('span', { className: 'topbar-title' }, titles[props.current] || 'Dashboard'),
       h('span', { className: 'topbar-sub' }, props.session.tenant_name + ' \u00b7 ' + props.session.timezone)
     ),
     h('div', { className: 'topbar-right' },
-      props.current === 'dashboard' ? h('div', { className: 'range-tabs', role: 'group', 'aria-label': 'Dashboard period' },
+      (props.current === 'dashboard' || props.current === 'analytics') ? h('div', { className: 'range-tabs', role: 'group', 'aria-label': 'Reporting period' },
         ['7d', '30d', '90d'].map(function(r) {
           return h('button', {
             key: r,
@@ -979,6 +1001,91 @@ function DashboardScreen(props) {
     h('div', { className: 'bottom-row' },
       h(RunTable, { rows: data.recent_runs, timezone: props.timezone, label: 'Recent agent runs', emptyTitle: 'No runs in this period' }),
       h(AttentionList, { items: data.attention, timezone: props.timezone })
+    )
+  );
+}
+
+// ── Screen: Inbox ────────────────────────────────────────────────────────────
+// Escalated conversations are already tenant-scoped by the runs endpoint. This
+// makes the inbox useful without creating a second, unsynchronised queue.
+function InboxScreen(props) {
+  var resource = usePollingResource('inbox:escalated', function(signal) {
+    return fetchJSON('/runs?status=escalated&limit=50', signal);
+  }, 10000, true);
+  if (resource.loading) return h(LoadingState, { label: 'Loading inbox' });
+  if (resource.error && !resource.data) return h(ErrorView, { error: resource.error, onRetry: resource.retry, title: 'Could not load the inbox' });
+  var runs = resource.data.items || [];
+  return h('section', { 'aria-busy': resource.refreshing ? 'true' : 'false' },
+    h('h1', { className: 'section-heading' }, 'Inbox'),
+    h('p', { className: 'section-description' }, 'Conversations that Kontor escalated for human follow-up.'),
+    h(ResourceToolbar, { resource: resource }),
+    runs.length ? h('div', { className: 'inbox-list', role: 'list', 'aria-label': 'Escalated conversations' },
+      runs.map(function(run) {
+        return h('a', { key: run.id, className: 'inbox-item', href: '#/runs/' + encodeURIComponent(run.id), role: 'listitem', 'aria-label': 'Open escalated run for ' + (run.customer_name || 'unknown customer') },
+          h('span', { className: 'inbox-marker', 'aria-hidden': 'true' }),
+          h('span', { style: { minWidth: 0, flex: 1 } },
+            h('span', { className: 'inbox-title' }, run.customer_name || 'Unknown customer'),
+            h('span', { className: 'inbox-meta' }, channelLabel(run.channel) + ' · ' + formatInstant(run.started_at, props.timezone) + ' · ' + formatDuration(run.duration_ms))
+          ),
+          h(Badge, { tone: 'warning' }, 'Escalated')
+        );
+      })
+    ) : h(EmptyView, { title: 'Inbox zero', description: 'No conversations currently need human follow-up.' })
+  );
+}
+
+// ── Screen: Analytics ────────────────────────────────────────────────────────
+// This view reuses the authoritative dashboard aggregation rather than copying
+// client-side calculations or introducing a speculative API.
+function AnalyticsScreen(props) {
+  var resource = usePollingResource('analytics:' + props.range, function(signal) {
+    return fetchJSON('/dashboard?range=' + encodeURIComponent(props.range), signal);
+  }, 10000, true);
+  if (resource.loading) return h(LoadingState, { label: 'Loading analytics' });
+  if (resource.error && !resource.data) return h(ErrorView, { error: resource.error, onRetry: resource.retry, title: 'Could not load analytics' });
+  var data = resource.data;
+  var kpis = data.kpis || {};
+  return h('section', { 'aria-busy': resource.refreshing ? 'true' : 'false' },
+    h('h1', { className: 'section-heading' }, 'Analytics'),
+    h('p', { className: 'section-description' }, 'Tenant-local booking and agent-run outcomes for the selected period.'),
+    h(ResourceToolbar, { resource: resource }),
+    h('div', { className: 'kpi-grid' }, [
+      ['Bookings today', formatNumber(kpis.bookings_today)], ['Total runs', formatNumber(kpis.total_runs)],
+      ['Success rate', formatPercent(kpis.success_rate)], ['Median latency', formatDuration(kpis.median_latency_ms)],
+      ['Open escalations', formatNumber(kpis.open_escalations)], ['Tokens used', formatNumber(kpis.total_tokens)]
+    ].map(function(item) { return h('div', { key: item[0], className: 'kpi-card' }, h('div', { className: 'kpi-label' }, item[0]), h('div', { className: 'kpi-value' }, item[1])); })),
+    h('div', { className: 'analytics-grid' },
+      h('div', { className: 'chart-card' }, h('div', { className: 'chart-title' }, 'Bookings created'), h('div', { className: 'chart-subtitle' }, 'Last ' + data.period_days + ' days · by channel'), h(BookingChart, { series: data.booking_series })),
+      h('div', { className: 'chart-card' }, h('div', { className: 'chart-title' }, 'Run outcomes'), h(OutcomeChart, { outcomes: data.run_outcomes }))
+    )
+  );
+}
+
+// ── Screen: Settings ─────────────────────────────────────────────────────────
+function SettingsScreen() {
+  var resource = usePollingResource('settings:session', function(signal) { return fetchJSON('/session', signal); }, 0, true);
+  if (resource.loading) return h(LoadingState, { label: 'Loading settings' });
+  if (resource.error && !resource.data) return h(ErrorView, { error: resource.error, onRetry: resource.retry, title: 'Could not load settings' });
+  var session = resource.data;
+  var owner = session.role === 'owner';
+  function facts(items) {
+    return h('div', { className: 'kv-block' }, items.map(function(item) {
+      return h('div', { key: item[0], className: 'kv-row' }, h('span', { className: 'kv-label' }, item[0]), h('span', { className: 'kv-value' + (item[2] ? ' mono' : '') }, item[1]));
+    }));
+  }
+  return h('section', { 'aria-busy': resource.refreshing ? 'true' : 'false' },
+    h('h1', { className: 'section-heading' }, 'Settings'),
+    h('p', { className: 'section-description' }, 'Your authenticated operator identity and tenant context.'),
+    h(ResourceToolbar, { resource: resource }),
+    h('div', { className: 'settings-stack' },
+      h('section', { className: 'settings-card', 'aria-labelledby': 'settings-account' }, h('h2', { id: 'settings-account' }, 'Operator account'), facts([
+        ['Name', session.operator_name || '—'], ['Email', session.operator_email || '—'], ['Role', session.role || 'operator']
+      ])),
+      h('section', { className: 'settings-card', 'aria-labelledby': 'settings-tenant' }, h('h2', { id: 'settings-tenant' }, 'Tenant'), facts([
+        ['Business', session.tenant_name || '—'], ['Timezone', session.timezone || 'UTC'], ['Currency', session.currency || '—'], ['Tenant ID', session.tenant_id || '—', true]
+      ]), h('p', { className: 'settings-note' }, owner
+        ? 'Tenant configuration changes remain on the owner-authorized operator API; this screen never exposes session credentials.'
+        : 'You have staff access. Tenant configuration is restricted to the tenant owner.'))
     )
   );
 }
@@ -1673,7 +1780,9 @@ function CalendarScreen(props) {
 
 function getRoute() {
   var hash = window.location.hash || '#/';
-  if (hash === '#/' || hash === '#/dashboard') return { name: 'dashboard', id: '' };
+  // #/ and #/dashboard remain supported bookmarks. #/overview is the
+  // canonical name in navigation, without a server route or API change.
+  if (hash === '#/' || hash === '#/dashboard' || hash === '#/overview') return { name: 'dashboard', id: '' };
   if (hash === '#/runs' || hash === '#/runs/') return { name: 'runs', id: '' };
   var match = hash.match(/^#\/runs\/([^/?#]+)$/);
   if (match) {
@@ -1681,6 +1790,9 @@ function getRoute() {
     catch (_) { return { name: 'trace', id: '' }; }
   }
   if (hash === '#/calendar') return { name: 'calendar', id: '' };
+  if (hash === '#/inbox') return { name: 'inbox', id: '' };
+  if (hash === '#/analytics') return { name: 'analytics', id: '' };
+  if (hash === '#/settings') return { name: 'settings', id: '' };
   return { name: 'dashboard', id: '' };
 }
 
@@ -1721,7 +1833,7 @@ function App() {
   }, []);
 
   React.useEffect(function() {
-    var titles = { dashboard: 'Dashboard', runs: 'Runs', trace: 'Agent Trace', calendar: 'Calendar' };
+    var titles = { dashboard: 'Overview', runs: 'Runs', trace: 'Agent Trace', calendar: 'Calendar', inbox: 'Inbox', analytics: 'Analytics', settings: 'Settings' };
     document.title = (token ? (titles[route.name] || 'Operator') : 'Operator access') + ' \u00b7 Kontor';
     var main = document.getElementById('operator-main');
     if (main) main.focus();
@@ -1756,6 +1868,9 @@ function App() {
     case 'runs': screen = h(RunsScreen, { timezone: session.timezone }); break;
     case 'trace': screen = h(TraceScreen, { runID: route.id, timezone: session.timezone }); break;
     case 'calendar': screen = h(CalendarScreen, { timezone: session.timezone }); break;
+    case 'inbox': screen = h(InboxScreen, { timezone: session.timezone }); break;
+    case 'analytics': screen = h(AnalyticsScreen, { range: range }); break;
+    case 'settings': screen = h(SettingsScreen); break;
     default: screen = h(DashboardScreen, { range: range, timezone: session.timezone });
   }
 

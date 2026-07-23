@@ -233,8 +233,12 @@ func Load() (Config, error) {
 	if cfg.Agent.ToolMaxAttempts < 1 || cfg.Agent.ToolMaxAttempts > 16 {
 		return Config{}, errors.New("AGENT_TOOL_MAX_ATTEMPTS must be between 1 and 16")
 	}
-	if cfg.Agent.ConversationTokenBudget < 1 || cfg.Agent.ConversationTokenBudget > 100_000 {
-		return Config{}, errors.New("AGENT_CONVERSATION_TOKEN_BUDGET must be between 1 and 100000")
+	// The ceiling only guards against a typo turning the per-conversation cap
+	// into an unbounded one. A real-model booking spends ~65 000 tokens across
+	// two turns, and the conservative estimator reserves ~3x a turn's actual
+	// use on top, so 100 000 could not hold one completed booking.
+	if cfg.Agent.ConversationTokenBudget < 1 || cfg.Agent.ConversationTokenBudget > 2_000_000 {
+		return Config{}, errors.New("AGENT_CONVERSATION_TOKEN_BUDGET must be between 1 and 2000000")
 	}
 	if cfg.Agent.MaxOutputTokens < 1 {
 		return Config{}, errors.New("AGENT_MAX_OUTPUT_TOKENS must be positive")

@@ -75,6 +75,32 @@ func TestStorePersistsOnlyCapabilityDigestAndScopesVerification(t *testing.T) {
 	}
 }
 
+func TestStoreAllowsMissingContactAndCapturesLiteralContactFromMessage(t *testing.T) {
+	pool := conversationIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store := conversations.NewStore(pool)
+
+	conversation, err := store.CreateDemo(ctx, config.DefaultTenantID, conversations.Profile{DisplayName: "Needs Contact"}, 50000)
+	if err != nil {
+		t.Fatalf("create without contact: %v", err)
+	}
+	profile, err := store.CaptureContactFromMessage(ctx, config.DefaultTenantID, conversation.CustomerID, "Please use me@example.com, thanks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Email != "me@example.com" || profile.Phone != "" {
+		t.Fatalf("captured profile=%#v", profile)
+	}
+	profile, err = store.CaptureContactFromMessage(ctx, config.DefaultTenantID, conversation.CustomerID, "My other address is ignored@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Email != "me@example.com" {
+		t.Fatalf("literal contact overwrote existing profile: %#v", profile)
+	}
+}
+
 func conversationIntegrationPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	databaseURL := os.Getenv("TEST_DATABASE_URL")

@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -414,6 +416,44 @@ func TestOpenRouterAdapterAccumulatesReportedUsageAcrossRetryAttempts(t *testing
 	if response.UsageIncomplete {
 		t.Fatal("fully reported retry usage was marked incomplete")
 	}
+	if response.UnknownUsageAttempts != 0 {
+		t.Fatalf("unknown attempts = %d, want 0", response.UnknownUsageAttempts)
+	}
+}
+
+func TestOpenRouterAdapterCountsAttemptsThatReportedNoUsage(t *testing.T) {
+	t.Parallel()
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			// A failed attempt with no usage body: the tokens it consumed are
+			// unknown, but the successful attempt below reports its own.
+			return openRouterTestResponse(http.StatusBadGateway, nil, `{"error":{"code":502,"message":"provider disconnected"}}`), nil
+		}
+		return openRouterTestResponse(http.StatusOK, nil, openRouterSuccessBody(11)), nil
+	})}
+	adapter, err := NewOpenRouterAdapter(OpenRouterConfig{
+		APIKey: "key", Model: "model", Endpoint: "https://openrouter.test", HTTPClient: client,
+		MaxAttempts: 2,
+		RetryJitter: func(time.Duration) time.Duration { return 0 },
+		RetryWait:   func(context.Context, time.Duration) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := adapter.Complete(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "hello"}}, MaxOutputTokens: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The count lets the runner price the gap instead of writing off the whole
+	// worst-case reservation for a call that did report its usage.
+	if !response.UsageIncomplete || response.UnknownUsageAttempts != 1 {
+		t.Fatalf("incomplete=%v unknown attempts=%d, want true/1", response.UsageIncomplete, response.UnknownUsageAttempts)
+	}
+	if response.Usage.Total() != 11 {
+		t.Fatalf("usage = %#v", response.Usage)
+	}
 }
 
 func TestOpenRouterAdapterRetryWaitHonorsAdapterContext(t *testing.T) {
@@ -487,4 +527,123 @@ func openRouterTestResponse(status int, headers http.Header, body string) *http.
 func openRouterSuccessBody(totalTokens int) string {
 	return `{"id":"gen-retry","model":"model","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":7,"completion_tokens":` +
 		strconv.Itoa(totalTokens-7) + `,"total_tokens":` + strconv.Itoa(totalTokens) + `}}`
+}
+
+func TestSanitizeParametersForProviderStripsUnsupportedKeys(t *testing.T) {
+	t.Parallel()
+	input := json.RawMessage(`{
+		"$schema":"https://json-schema.org/draft/2020-12/schema",
+		"type":"object",
+		"maxProperties":0,
+		"additionalProperties":false,
+		"required":["service_id","date_from"],
+		"properties":{
+			"service_id":{
+				"type":"string",
+				"format":"uuid",
+				"minLength":1,
+				"maxLength":200,
+				"pattern":"^[A-Za-z0-9]+$",
+				"description":"The service identifier"
+			},
+			"date_from":{"type":"string","format":"date-time"},
+			"notes":{"type":"string","minLength":1,"maxLength":500}
+		}
+	}`)
+	got := sanitizeParametersForProvider(input)
+	var parsed map[string]any
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("unmarshal sanitized output: %v", err)
+	}
+
+	// Top-level unsupported keys must be gone.
+	for _, key := range []string{"$schema", "maxProperties"} {
+		if _, exists := parsed[key]; exists {
+			t.Errorf("expected top-level key %q to be removed", key)
+		}
+	}
+	// Top-level supported keys must survive.
+	for _, key := range []string{"type", "additionalProperties", "required", "properties"} {
+		if _, exists := parsed[key]; !exists {
+			t.Errorf("expected top-level key %q to be preserved", key)
+		}
+	}
+
+	// Nested property-level keys.
+	properties, _ := parsed["properties"].(map[string]any)
+	serviceID, _ := properties["service_id"].(map[string]any)
+	for _, key := range []string{"minLength", "maxLength", "pattern", "format"} {
+		if _, exists := serviceID[key]; exists {
+			t.Errorf("expected service_id key %q to be removed", key)
+		}
+	}
+	for _, key := range []string{"type", "description"} {
+		if _, exists := serviceID[key]; !exists {
+			t.Errorf("expected service_id key %q to be preserved", key)
+		}
+	}
+	notes, _ := properties["notes"].(map[string]any)
+	if _, exists := notes["minLength"]; exists {
+		t.Error("expected notes minLength to be removed")
+	}
+	if _, exists := notes["maxLength"]; exists {
+		t.Error("expected notes maxLength to be removed")
+	}
+
+	// A stripped constraint must survive as prose, otherwise the model generates
+	// values the server-side gateway then rejects.
+	serviceDescription, _ := serviceID["description"].(string)
+	for _, want := range []string{
+		"The service identifier",
+		"must be a valid uuid",
+		"must match the regular expression ^[A-Za-z0-9]+$",
+		"at least 1 characters",
+		"at most 200 characters",
+	} {
+		if !strings.Contains(serviceDescription, want) {
+			t.Errorf("service_id description %q does not carry %q", serviceDescription, want)
+		}
+	}
+	notesDescription, _ := notes["description"].(string)
+	if !strings.Contains(notesDescription, "at most 500 characters") {
+		t.Errorf("notes description %q lost its length constraint", notesDescription)
+	}
+	// Sanitization must stay deterministic so identical tool definitions produce
+	// an identical wire payload on every request.
+	if second := sanitizeParametersForProvider(input); !bytes.Equal(got, second) {
+		t.Errorf("sanitized output is not deterministic:\n%s\n%s", got, second)
+	}
+}
+
+func TestSanitizeParametersForProviderPreservesArraySchema(t *testing.T) {
+	t.Parallel()
+	input := json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"tags":{"type":"array","items":{"type":"string","minLength":1,"maxLength":50}}
+		}
+	}`)
+	got := sanitizeParametersForProvider(input)
+	var parsed map[string]any
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	properties, _ := parsed["properties"].(map[string]any)
+	tags, _ := properties["tags"].(map[string]any)
+	items, _ := tags["items"].(map[string]any)
+	if _, exists := items["type"]; !exists {
+		t.Error("items.type must be preserved")
+	}
+	if _, exists := items["minLength"]; exists {
+		t.Error("items.minLength must be removed")
+	}
+}
+
+func TestSanitizeParametersForProviderInvalidJSON(t *testing.T) {
+	t.Parallel()
+	input := json.RawMessage(`not valid json`)
+	got := sanitizeParametersForProvider(input)
+	if string(got) != string(input) {
+		t.Fatalf("expected invalid JSON to be returned as-is, got %q", string(got))
+	}
 }

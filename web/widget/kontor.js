@@ -108,12 +108,15 @@
 
     '.kw-note{align-self:center;color:var(--text-tertiary);font-size:var(--fs-caption);text-align:center;padding:4px 0}' +
 
-    '.kw-skeleton{align-self:flex-start;max-width:88%;width:140px;height:36px;border-radius:12px 12px 12px 3px;' +
-    'background:linear-gradient(90deg,var(--surface-2) 25%,var(--surface-3) 50%,var(--surface-2) 75%);background-size:200% 100%;' +
-    'animation:kw-shimmer 1.4s ease-in-out infinite}' +
-    '@keyframes kw-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}' +
+    '.kw-working{align-self:stretch;border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);border-radius:var(--radius-lg);overflow:hidden;background:color-mix(in srgb,var(--accent) 7%,var(--surface-1))}' +
+    '.kw-working-main{display:flex;align-items:center;gap:9px;padding:11px 13px 9px;font-size:var(--fs-body-sm);font-weight:600}' +
+    '.kw-working-dot{width:10px;height:10px;border-radius:50%;background:var(--accent);animation:kw-pulse 1.3s ease-in-out infinite}' +
+    '.kw-working-sub{padding:0 13px 11px;color:var(--text-secondary);font-size:var(--fs-caption)}' +
+    '.kw-working-progress{height:3px;background:var(--surface-2);overflow:hidden}.kw-working-progress::after{content:"";display:block;width:36%;height:100%;background:var(--accent);animation:kw-progress 1.4s cubic-bezier(.4,0,.2,1) infinite}' +
+    '@keyframes kw-pulse{0%,100%{opacity:.35;transform:scale(.8)}50%{opacity:1;transform:scale(1)}}@keyframes kw-progress{0%{transform:translateX(-100%)}100%{transform:translateX(280%)}}' +
 
     '.kw-card{align-self:stretch;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--radius-lg);padding:14px}' +
+    '.kw-confirm-banner{display:flex;align-items:center;gap:7px;margin:-14px -14px 13px;padding:9px 14px;background:color-mix(in srgb,var(--accent) 10%,var(--surface-1));border-bottom:1px solid color-mix(in srgb,var(--accent) 40%,transparent);color:var(--accent);font-size:var(--fs-micro);font-weight:600;letter-spacing:.08em;text-transform:uppercase}' +
     '.kw-card h4{margin:0 0 10px;font-size:var(--fs-body-sm);font-weight:600;color:var(--text-primary)}' +
     '.kw-card table{width:100%;border-collapse:collapse;font-size:var(--fs-body-sm)}' +
     '.kw-card td{padding:3px 0}.kw-card td:first-child{color:var(--text-tertiary);padding-right:12px;white-space:nowrap}' +
@@ -124,11 +127,22 @@
     '.kw-card button:disabled{opacity:0.5;cursor:default}' +
     '.kw-card button:focus-visible{outline:none;box-shadow:var(--focus-ring)}' +
 
-    '.kw-escalation{align-self:stretch;display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 10px;' +
-    'border-bottom:1px solid var(--status-warning-fg)}' +
+    '.kw-slot-picker{align-self:stretch;border:1px solid var(--border-default);border-radius:var(--radius-lg);overflow:hidden;background:var(--surface-2)}' +
+    '.kw-slot-picker h4{margin:0;padding:11px 13px;border-bottom:1px solid var(--border-subtle);font-size:var(--fs-body-sm)}' +
+    '.kw-slot-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:8px;padding:12px}' +
+    '.kw-slot{min-height:44px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-1);color:var(--text-primary);font:600 var(--fs-body-sm)/1 var(--font-mono);cursor:pointer}' +
+    '.kw-slot:hover{border-color:var(--accent);background:var(--accent-subtle)}.kw-slot:focus-visible{outline:none;box-shadow:var(--focus-ring)}' +
+
+    '.kw-escalation{align-self:stretch;display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 10px;border-top:1px solid color-mix(in srgb,var(--status-warning-fg) 45%,transparent);border-bottom:1px solid color-mix(in srgb,var(--status-warning-fg) 45%,transparent)}' +
     '.kw-escalation-icon{width:24px;height:24px;color:var(--status-warning-fg)}' +
     '.kw-escalation-icon svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}' +
     '.kw-escalation-text{font-size:var(--fs-body-sm);color:var(--text-secondary);text-align:center}' +
+
+    '.kw-escalation-restart{margin-top:10px;padding:8px 16px;border:1px solid var(--border-default);border-radius:var(--radius-md);' +
+    'background:var(--surface-2);color:var(--text-primary);font-size:var(--fs-body-sm);font-weight:500;cursor:pointer;' +
+    'transition:border-color 150ms var(--ease-out),background 150ms var(--ease-out)}' +
+    '.kw-escalation-restart:hover{border-color:var(--accent);background:var(--surface-3)}' +
+    '.kw-escalation-restart:focus-visible{outline:none;box-shadow:var(--focus-ring)}' +
 
     '.kw-form{display:flex;flex-direction:column;gap:10px;padding:20px 16px;justify-content:center;flex:1}' +
     '.kw-form-label{font-size:var(--fs-body-sm);color:var(--text-secondary);text-align:center;margin-bottom:4px}' +
@@ -197,9 +211,9 @@
   function renderStartForm() {
     body.innerHTML =
       '<form class="kw-form">' +
-      '<div class="kw-form-label">Leave your name and email and ask for an appointment.</div>' +
+      '<div class="kw-form-label">Leave your name and ask for an appointment. We will ask for contact details only when needed.</div>' +
       '<input name="name" placeholder="Your name" maxlength="200" required aria-label="Your name">' +
-      '<input name="email" type="email" placeholder="Email" maxlength="254" required aria-label="Email">' +
+      '<input name="email" type="email" placeholder="Email (optional)" maxlength="254" aria-label="Email (optional)">' +
       '<div class="kw-error"></div>' +
       '<button type="submit">Start chat</button>' +
       '</form>';
@@ -270,12 +284,20 @@
     log.scrollTop = log.scrollHeight;
   }
 
-  function addSkeleton() {
-    var el = document.createElement("div");
-    el.className = "kw-skeleton";
-    log.appendChild(el);
+  // The customer sees that Kontor is performing a server-side turn, rather
+  // than an ambiguous typing indicator. It never claims a booking exists.
+  function addWorkingIndicator() {
+    var block = document.createElement("div");
+    block.className = "kw-working";
+    block.setAttribute("role", "status");
+    block.setAttribute("aria-live", "polite");
+    block.innerHTML =
+      '<div class="kw-working-main"><span class="kw-working-dot" aria-hidden="true"></span>Kontor is working</div>' +
+      '<div class="kw-working-sub">Checking your request safely before making any change.</div>' +
+      '<div class="kw-working-progress" aria-hidden="true"></div>';
+    log.appendChild(block);
     log.scrollTop = log.scrollHeight;
-    return el;
+    return block;
   }
 
   function addEscalationNotice() {
@@ -284,6 +306,12 @@
     block.innerHTML =
       '<div class="kw-escalation-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>' +
       '<div class="kw-escalation-text">A person now handles this conversation</div>';
+    var restart = document.createElement("button");
+    restart.type = "button";
+    restart.className = "kw-escalation-restart";
+    restart.textContent = "Start a new conversation";
+    restart.addEventListener("click", function () { resetAndRestart(); });
+    block.appendChild(restart);
     log.appendChild(block);
     log.scrollTop = log.scrollHeight;
   }
@@ -291,6 +319,11 @@
   function addConfirmationCard(confirmation) {
     var card = document.createElement("div");
     card.className = "kw-card";
+	card.setAttribute("data-pending-confirmation", "true");
+    var banner = document.createElement("div");
+    banner.className = "kw-confirm-banner";
+    banner.textContent = "Kontor will book this";
+    card.appendChild(banner);
     var title = document.createElement("h4");
     title.textContent = confirmation.title || "Confirm this action";
     card.appendChild(title);
@@ -310,6 +343,11 @@
       sendMessage("Yes, confirm");
     });
     card.appendChild(confirm);
+    var note = document.createElement("div");
+    note.className = "kw-note";
+    note.style.marginTop = "8px";
+    note.textContent = "Nothing is booked until you confirm.";
+    card.appendChild(note);
     log.appendChild(card);
     log.scrollTop = log.scrollHeight;
   }
@@ -319,16 +357,19 @@
   function renderTurn(turn) {
     if (turn.message_id && state.rendered[turn.message_id]) return;
     if (turn.message_id) state.rendered[turn.message_id] = true;
+    if (typeof turn.pending_confirmation_active === "boolean" && !turn.pending_confirmation_active) {
+      log.querySelectorAll('[data-pending-confirmation="true"]').forEach(function (card) { card.remove(); });
+    }
     addBubble("kw-agent", turn.message);
     if (turn.pending_confirmation) addConfirmationCard(turn.pending_confirmation);
-    if (turn.outcome === "escalated") addEscalationNotice();
+    if (turn.outcome === "escalated" || turn.outcome === "budget_exhausted") addEscalationNotice();
   }
 
   function sendMessage(text) {
     state.busy = true;
     if (sendButton) sendButton.disabled = true;
     addBubble("kw-user", text);
-    var thinking = addSkeleton();
+    var thinking = addWorkingIndicator();
     fetch(API + "/api/v1/demo/conversations/" + encodeURIComponent(state.conversationId) + "/messages", {
       method: "POST",
       headers: {
@@ -350,6 +391,20 @@
       state.busy = false;
       if (sendButton) sendButton.disabled = false;
     });
+  }
+
+  /* ------------------------------- reset -------------------------------- */
+
+  function resetAndRestart() {
+    if (state.streamAbort) { state.streamAbort.abort(); state.streamAbort = null; }
+    state.streaming = false;
+    state.conversationId = null;
+    state.token = null;
+    state.lastEventId = 0;
+    state.rendered = {};
+    state.busy = false;
+    try { sessionStorage.removeItem(STORE_KEY); } catch (_) {}
+    renderStartForm();
   }
 
   /* ------------------------------- stream ------------------------------- */

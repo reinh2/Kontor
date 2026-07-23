@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
+	schemakind "github.com/santhosh-tekuri/jsonschema/v6/kind"
 )
 
 const maxCustomerResponseRunes = 2000
@@ -64,9 +65,60 @@ func validateArguments(schema *jsonschema.Schema, raw json.RawMessage) (map[stri
 		return nil, fmt.Errorf("trusted identity field is forbidden at %s", path)
 	}
 	if err := schema.Validate(instance); err != nil {
-		return nil, errors.New("arguments do not match the tool's v1 JSON Schema")
+		return nil, fmt.Errorf("arguments do not match the tool's v1 JSON Schema%s", schemaViolations(err))
 	}
 	return object, nil
+}
+
+const maxReportedSchemaViolations = 3
+
+// schemaViolations names the failing argument paths and the keywords they
+// violated so a fix_arguments resolution is actionable. Only the server's own
+// schema vocabulary and the model's own argument paths are reported: instance
+// values never appear, so untrusted content cannot ride back into the model.
+func schemaViolations(err error) string {
+	var validationErr *jsonschema.ValidationError
+	if !errors.As(err, &validationErr) {
+		return ""
+	}
+	seen := make(map[string]struct{}, maxReportedSchemaViolations)
+	violations := make([]string, 0, maxReportedSchemaViolations)
+	var walk func(node *jsonschema.ValidationError)
+	walk = func(node *jsonschema.ValidationError) {
+		if len(violations) >= maxReportedSchemaViolations || node == nil {
+			return
+		}
+		if len(node.Causes) > 0 {
+			for _, cause := range node.Causes {
+				walk(cause)
+			}
+			return
+		}
+		keyword := "constraint"
+		if path := node.ErrorKind.KeywordPath(); len(path) > 0 {
+			keyword = path[len(path)-1]
+		}
+		location := "/" + strings.Join(node.InstanceLocation, "/")
+		violation := location + " violates " + keyword
+		// Property names are the model's own generated keys, never instance data,
+		// so naming them turns "violates additionalProperties" into a fix.
+		switch specific := node.ErrorKind.(type) {
+		case *schemakind.AdditionalProperties:
+			violation += " (remove " + strings.Join(specific.Properties, ", ") + ")"
+		case *schemakind.Required:
+			violation += " (add " + strings.Join(specific.Missing, ", ") + ")"
+		}
+		if _, exists := seen[violation]; exists {
+			return
+		}
+		seen[violation] = struct{}{}
+		violations = append(violations, violation)
+	}
+	walk(validationErr)
+	if len(violations) == 0 {
+		return ""
+	}
+	return ": " + strings.Join(violations, "; ")
 }
 
 // ParseRespondToCustomerArguments validates the runner-local terminal control

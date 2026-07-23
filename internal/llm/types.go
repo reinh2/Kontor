@@ -45,8 +45,9 @@ type ToolDefinition struct {
 }
 
 // ToolChoice controls whether a model may answer without selecting a tool.
-// The production agent requires a tool because customer-facing replies use a
-// server-validated terminal control call rather than unstructured text.
+// The production agent prefers the structured terminal control call, but also
+// accepts a plain text answer because customer-facing prose alone cannot
+// perform a server-side action.
 type ToolChoice string
 
 const (
@@ -86,9 +87,14 @@ type Response struct {
 	FinishReason string
 	Usage        Usage
 	// UsageIncomplete means at least one provider attempt may have consumed
-	// tokens without returning usage. The runner must conservatively charge its
-	// full worst-case reservation instead of crediting unknown spend.
+	// tokens without returning usage. When Usage itself is empty the runner must
+	// charge its full worst-case reservation instead of crediting unknown spend.
 	UsageIncomplete bool
+	// UnknownUsageAttempts counts the attempts behind UsageIncomplete. Each one
+	// sent the same prompt and returned no completion, so it cost at most the
+	// reported input tokens; the runner prices them at that instead of writing
+	// off the whole reservation when a later attempt did report usage.
+	UnknownUsageAttempts int
 }
 
 // Adapter is implemented by real and deterministic model providers.

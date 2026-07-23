@@ -53,6 +53,10 @@ type ConfirmationState struct {
 type ConfirmationStore interface {
 	Propose(ctx context.Context, binding ConfirmationBinding, proposal ConfirmationProposal, now time.Time) (ConfirmationProposal, error)
 	Latest(ctx context.Context, tenantID, ownerCustomerID, conversationID string, now time.Time) (ConfirmationState, bool, error)
+	// InvalidateLatest withdraws any live proposal when the customer starts a
+	// different turn. A later free-text confirmation must never authorize an
+	// action the customer can no longer see or has superseded.
+	InvalidateLatest(ctx context.Context, tenantID, ownerCustomerID, conversationID string, now time.Time) error
 	Authorize(ctx context.Context, confirmationID string, confirmedBy TrustedContext, now time.Time) error
 	VerifyAuthorized(ctx context.Context, confirmationID string, binding ConfirmationBinding, now time.Time) error
 	MarkConsumed(ctx context.Context, confirmationID string, binding ConfirmationBinding, now time.Time) error
@@ -110,6 +114,20 @@ func (s *MemoryConfirmationStore) Latest(_ context.Context, tenantID, ownerCusto
 		}
 	}
 	return latest, found, nil
+}
+
+func (s *MemoryConfirmationStore) InvalidateLatest(_ context.Context, tenantID, ownerCustomerID, conversationID string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, record := range s.records {
+		if record.Binding.TenantID == tenantID && record.Binding.OwnerCustomerID == ownerCustomerID &&
+			record.Binding.ConversationID == conversationID && now.Before(record.Proposal.ExpiresAt) &&
+			(record.Status == "pending" || record.Status == "authorized") {
+			record.Status = "rejected"
+			s.records[id] = record
+		}
+	}
+	return nil
 }
 
 func (s *MemoryConfirmationStore) Authorize(_ context.Context, id string, confirmedBy TrustedContext, now time.Time) error {

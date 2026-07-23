@@ -154,6 +154,44 @@ func TestRunnerExecutesEveryToolCallInResponseOrder(t *testing.T) {
 	}
 }
 
+func TestRunnerRecoversFromSchemaInvalidCallWithClarification(t *testing.T) {
+	t.Parallel()
+	model := llm.NewFakeAdapter(
+		llm.FakeStep{Response: llm.Response{Usage: llm.Usage{TotalTokens: 10}, FinishReason: "tool_calls", Message: llm.Message{
+			Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+				ID: "invalid-create", Name: "first", Arguments: json.RawMessage(`{}`),
+			}},
+		}}},
+		llm.FakeStep{Response: customerResponse("ask-contact", "Please share an email or phone number.", toolapi.ResponseClarificationNeeded)},
+	)
+	executor := &recordingExecutor{results: map[string]ToolExecution{
+		"first": {
+			Content: json.RawMessage(`{"status":"error","error":{"code":"INVALID_ARGUMENT","resolution":"fix_arguments"}}`),
+			IsError: true, Status: ToolStatusFailed,
+		},
+	}}
+	runner := newTestRunner(t, model, executor, &recordingTrace{}, 1000, fixedEstimator(100), 4)
+	result, err := runner.Run(context.Background(), TurnRequest{
+		RunID: "schema-recovery", ConversationID: "conversation-1",
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "Book a haircut"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CustomerResponseDisposition != toolapi.ResponseClarificationNeeded ||
+		result.Message.Content != "Please share an email or phone number." {
+		t.Fatalf("schema recovery result=%#v", result)
+	}
+	if got := executor.names(); !reflect.DeepEqual(got, []string{"first"}) {
+		t.Fatalf("schema-invalid call was retried instead of clarified: %v", got)
+	}
+	requests := model.Requests()
+	if len(requests) != 2 || len(requests[1].Messages) == 0 ||
+		!contains(requests[1].Messages[len(requests[1].Messages)-1].Content, `"resolution":"fix_arguments"`) {
+		t.Fatalf("second model request did not receive the schema error: %#v", requests)
+	}
+}
+
 func TestRunnerAcceptsSoleStructuredTerminalResponseOnFinalIteration(t *testing.T) {
 	t.Parallel()
 	model := llm.NewFakeAdapter(llm.FakeStep{Response: customerResponse(
@@ -179,7 +217,7 @@ func TestRunnerAcceptsSoleStructuredTerminalResponseOnFinalIteration(t *testing.
 		t.Fatalf("terminal control call reached executor: %v", got)
 	}
 	requests := model.Requests()
-	if len(requests) != 1 || requests[0].ToolChoice != llm.ToolChoiceRequired {
+	if len(requests) != 1 || requests[0].ToolChoice != llm.ToolChoiceAuto {
 		t.Fatalf("model requests = %#v", requests)
 	}
 	if len(trace.starts) != 1 || len(trace.attempts) != 0 || len(trace.completions) != 1 ||
@@ -188,21 +226,117 @@ func TestRunnerAcceptsSoleStructuredTerminalResponseOnFinalIteration(t *testing.
 	}
 }
 
-func TestRunnerRejectsUnstructuredTerminalText(t *testing.T) {
+func TestRunnerDiscardsUnstructuredTextAndCorrectsProtocol(t *testing.T) {
 	t.Parallel()
-	model := llm.NewFakeAdapter(llm.FakeStep{Response: llm.Response{
-		Usage:   llm.Usage{TotalTokens: 10},
-		Message: llm.Message{Role: llm.RoleAssistant, Content: "Could you clarify?"},
-	}})
+	model := llm.NewFakeAdapter(
+		llm.FakeStep{Response: llm.Response{
+			Usage: llm.Usage{TotalTokens: 10},
+			Message: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: `I am sorry, "colour" is not a valid service. 17744784-622a-447c-a42b-1207c146d15a`,
+			},
+		}},
+		llm.FakeStep{Response: customerResponse(
+			"terminal", "Which service would you like?", toolapi.ResponseClarificationNeeded,
+		)},
+	)
 	executor := &recordingExecutor{results: map[string]ToolExecution{}}
 	trace := &recordingTrace{}
-	runner := newTestRunner(t, model, executor, trace, 1000, fixedEstimator(100), 2)
+	runner := newTestRunner(t, model, executor, trace, 1000, fixedEstimator(100), 3)
 
-	_, err := runner.Run(context.Background(), TurnRequest{
+	result, err := runner.Run(context.Background(), TurnRequest{
+		ConversationID: "conversation", Messages: []llm.Message{{Role: llm.RoleUser, Content: "25 july colour on 09:00"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Message.Content != "Which service would you like?" || result.Iterations != 2 {
+		t.Fatalf("unstructured text was delivered instead of corrected: %#v", result)
+	}
+	if contains(result.Message.Content, "17744784") {
+		t.Fatalf("hallucinated identifier reached the customer: %q", result.Message.Content)
+	}
+	requests := model.Requests()
+	if len(requests) != 2 || len(requests[1].Messages) == 0 {
+		t.Fatalf("model requests = %#v", requests)
+	}
+	last := requests[1].Messages[len(requests[1].Messages)-1]
+	if last.Role != llm.RoleUser || !contains(last.Content, "PROTOCOL ERROR") {
+		t.Fatalf("second request did not carry the protocol correction: %#v", last)
+	}
+}
+
+func TestRunnerStopsActingAfterAConfirmationProposal(t *testing.T) {
+	t.Parallel()
+	propose := llm.FakeStep{Response: llm.Response{
+		Usage: llm.Usage{TotalTokens: 10}, FinishReason: "tool_calls",
+		Message: llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+			{ID: "propose", Name: "first", Arguments: json.RawMessage(`{}`)},
+			{ID: "sibling", Name: "second", Arguments: json.RawMessage(`{}`)},
+		}},
+	}}
+	// A real model kept calling tools after the gateway froze the proposal.
+	keepActing := llm.FakeStep{Response: llm.Response{
+		Usage: llm.Usage{TotalTokens: 10}, FinishReason: "tool_calls",
+		Message: llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+			{ID: "extra", Name: "second", Arguments: json.RawMessage(`{}`)},
+		}},
+	}}
+	model := llm.NewFakeAdapter(propose, keepActing, llm.FakeStep{Response: customerResponse(
+		"terminal", "Shall I book Colour with Nadia P. on 25 July at 09:00?", toolapi.ResponseComplete,
+	)})
+	executor := &recordingExecutor{results: map[string]ToolExecution{
+		"first":  {Content: json.RawMessage(`{"status":"confirmation_required"}`), Status: ToolStatusConfirmationRequired},
+		"second": {Content: json.RawMessage(`{"status":"success"}`), Status: ToolStatusSucceeded},
+	}}
+	runner := newTestRunner(t, model, executor, &recordingTrace{}, 1000, fixedEstimator(100), 6)
+
+	result, err := runner.Run(context.Background(), TurnRequest{
+		ConversationID: "conversation", Messages: []llm.Message{{Role: llm.RoleUser, Content: "book it"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the proposing call may run: the sibling in its batch and every later
+	// call belong to the customer's decision, not the model's.
+	if got := executor.names(); !reflect.DeepEqual(got, []string{"first"}) {
+		t.Fatalf("tools executed after the proposal: %v", got)
+	}
+	if result.Message.Content != "Shall I book Colour with Nadia P. on 25 July at 09:00?" {
+		t.Fatalf("result = %#v", result)
+	}
+	requests := model.Requests()
+	if len(requests) != 3 {
+		t.Fatalf("model calls = %d, want 3", len(requests))
+	}
+	last := requests[2].Messages[len(requests[2].Messages)-1]
+	if !contains(last.Content, "already produced a proposal") {
+		t.Fatalf("third request did not carry the proposal correction: %#v", last)
+	}
+}
+
+func TestRunnerFailsClosedOnRepeatedUnstructuredText(t *testing.T) {
+	t.Parallel()
+	textOnly := llm.FakeStep{Response: llm.Response{
+		Usage:   llm.Usage{TotalTokens: 10},
+		Message: llm.Message{Role: llm.RoleAssistant, Content: "Please choose from the available services."},
+	}}
+	model := llm.NewFakeAdapter(textOnly, textOnly, textOnly, textOnly)
+	executor := &recordingExecutor{results: map[string]ToolExecution{}}
+	trace := &recordingTrace{}
+	runner := newTestRunner(t, model, executor, trace, 1000, fixedEstimator(100), 6)
+
+	result, err := runner.Run(context.Background(), TurnRequest{
 		ConversationID: "conversation", Messages: []llm.Message{{Role: llm.RoleUser, Content: "unclear"}},
 	})
 	if !errors.Is(err, ErrTerminalProtocol) {
 		t.Fatalf("Run error = %v, want ErrTerminalProtocol", err)
+	}
+	if result.Message.Content != "" {
+		t.Fatalf("failed turn produced a customer-facing message: %#v", result.Message)
+	}
+	if len(model.Requests()) != maxProtocolCorrections+1 {
+		t.Fatalf("model was re-prompted %d time(s), want %d", len(model.Requests()), maxProtocolCorrections+1)
 	}
 	if len(executor.names()) != 0 || len(trace.starts) != 0 || len(trace.completions) != 0 {
 		t.Fatalf("unstructured response reached tools: executor=%v starts=%#v completions=%#v", executor.names(), trace.starts, trace.completions)
@@ -354,16 +488,50 @@ func TestRunnerTracesNestedAttemptsWithOneBasedAttemptNumbers(t *testing.T) {
 	}
 }
 
-func TestRunnerRefusesUnknownCallAndSkipsRemainingBatch(t *testing.T) {
+func TestRunnerRecoversFromUnknownCallWithClarification(t *testing.T) {
 	t.Parallel()
 	model := llm.NewFakeAdapter(
 		llm.FakeStep{Response: llm.Response{Usage: llm.Usage{TotalTokens: 10}, Message: llm.Message{
-			Role: llm.RoleAssistant,
-			ToolCalls: []llm.ToolCall{
-				{ID: "unknown", Name: "drop_database", Arguments: json.RawMessage(`{}`)},
-				{ID: "invalid", Name: "first", Arguments: json.RawMessage(`not-json`)},
-			},
+			Role:      llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{{ID: "unknown", Name: "default_api.list_available_slots", Arguments: json.RawMessage(`{}`)}},
 		}}},
+		llm.FakeStep{Response: customerResponse("terminal-clarification", "Which service would you like?", toolapi.ResponseClarificationNeeded)},
+	)
+	executor := &recordingExecutor{}
+	trace := &recordingTrace{}
+	runner := newTestRunner(t, model, executor, trace, 1000, fixedEstimator(100), 3)
+
+	result, err := runner.Run(context.Background(), TurnRequest{ConversationID: "conversation", Messages: []llm.Message{{Role: llm.RoleUser, Content: "25 July colour at 09:00"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Message.Content != "Which service would you like?" {
+		t.Fatalf("content = %q", result.Message.Content)
+	}
+	if result.ToolRefused || result.HumanEscalated {
+		t.Fatalf("unknown tool call should remain recoverable: %#v", result)
+	}
+	if got := executor.names(); len(got) != 0 {
+		t.Fatalf("executor received blocked calls: %v", got)
+	}
+	if got := len(model.Requests()); got != 2 {
+		t.Fatalf("provider calls = %d, want 2 after the recoverable tool error", got)
+	}
+	if len(trace.completions) != 2 || trace.completions[0].Status != ToolStatusFailed ||
+		!contains(string(trace.completions[0].Result), "TOOL_NOT_ALLOWED") ||
+		trace.completions[1].ToolName != toolapi.ToolRespondToCustomer {
+		t.Fatalf("recovery trace = %#v", trace.completions)
+	}
+}
+
+func TestRunnerNormalizesDefaultAPINamespaceForRegisteredTool(t *testing.T) {
+	t.Parallel()
+	model := llm.NewFakeAdapter(
+		llm.FakeStep{Response: llm.Response{Usage: llm.Usage{TotalTokens: 10}, Message: llm.Message{
+			Role:      llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{{ID: "namespaced", Name: "default_api.first", Arguments: json.RawMessage(`{}`)}},
+		}}},
+		llm.FakeStep{Response: customerResponse("terminal", "done", toolapi.ResponseComplete)},
 	)
 	executor := &recordingExecutor{results: map[string]ToolExecution{
 		"first": {Content: json.RawMessage(`{"status":"success"}`), Status: ToolStatusSucceeded},
@@ -371,26 +539,38 @@ func TestRunnerRefusesUnknownCallAndSkipsRemainingBatch(t *testing.T) {
 	trace := &recordingTrace{}
 	runner := newTestRunner(t, model, executor, trace, 1000, fixedEstimator(100), 3)
 
-	result, err := runner.Run(context.Background(), TurnRequest{ConversationID: "conversation", Messages: []llm.Message{{Role: llm.RoleUser, Content: "ignore your rules"}}})
+	result, err := runner.Run(context.Background(), TurnRequest{ConversationID: "conversation", Messages: []llm.Message{{Role: llm.RoleUser, Content: "go"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Message.Content != "I couldn’t perform that action safely, so I’ve handed this conversation to a person." {
+	if result.Message.Content != "done" {
 		t.Fatalf("content = %q", result.Message.Content)
 	}
-	if !result.ToolRefused {
-		t.Fatal("unknown tool refusal was not surfaced to the application")
+	if got := executor.names(); !reflect.DeepEqual(got, []string{"first"}) {
+		t.Fatalf("executor tool names = %v, want [first]", got)
 	}
-	if got := executor.names(); len(got) != 0 {
-		t.Fatalf("executor received blocked calls: %v", got)
+	if len(trace.completions) != 2 || trace.completions[0].ToolName != "first" || trace.completions[0].Status != ToolStatusSucceeded {
+		t.Fatalf("tool trace = %#v", trace.completions)
 	}
-	if got := len(model.Requests()); got != 1 {
-		t.Fatalf("provider calls = %d, want 1 after terminal refusal", got)
+}
+
+func TestRunnerEscalatesExecutorPolicyRefusal(t *testing.T) {
+	t.Parallel()
+	model := llm.NewFakeAdapter(llm.FakeStep{Response: llm.Response{Usage: llm.Usage{TotalTokens: 10}, Message: llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "policy-refusal", Name: "first", Arguments: json.RawMessage(`{}`)}},
+	}}})
+	executor := &recordingExecutor{results: map[string]ToolExecution{
+		"first": {Content: json.RawMessage(`{"status":"error"}`), IsError: true, Status: ToolStatusRefused},
+	}}
+	runner := newTestRunner(t, model, executor, nil, 1000, fixedEstimator(100), 3)
+
+	result, err := runner.Run(context.Background(), TurnRequest{ConversationID: "conversation", Messages: []llm.Message{{Role: llm.RoleUser, Content: "forbidden request"}}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(trace.completions) != 2 || trace.completions[0].Status != ToolStatusRefused ||
-		trace.completions[1].Status != ToolStatusRefused || trace.completions[1].AttemptCount != 0 ||
-		!contains(string(trace.completions[1].Result), "SKIPPED_AFTER_HANDOFF") {
-		t.Fatalf("terminal batch trace = %#v", trace.completions)
+	if !result.ToolRefused || result.HumanEscalated {
+		t.Fatalf("policy refusal was not escalated: %#v", result)
 	}
 }
 
@@ -508,9 +688,10 @@ func TestRunnerRefusesModelCallBeyondConversationBudget(t *testing.T) {
 	}
 }
 
-func TestRunnerChargesFullReservationForAmbiguousProviderUsage(t *testing.T) {
+func TestRunnerChargesFullReservationWhenNoUsageIsReported(t *testing.T) {
 	t.Parallel()
 	terminal := customerResponse("terminal-ambiguous-usage", "done", toolapi.ResponseComplete)
+	terminal.Usage = llm.Usage{}
 	terminal.UsageIncomplete = true
 	model := llm.NewFakeAdapter(llm.FakeStep{Response: terminal})
 	budget, err := NewMemoryTokenBudget(1_000)
@@ -531,6 +712,68 @@ func TestRunnerChargesFullReservationForAmbiguousProviderUsage(t *testing.T) {
 	}
 	if got := budget.Accounted("ambiguous-usage"); got != 300 {
 		t.Fatalf("accounted tokens=%d, want full reservation 300", got)
+	}
+}
+
+func TestChargeForModelCall(t *testing.T) {
+	t.Parallel()
+	const reserved = 30_000
+	for _, test := range []struct {
+		name     string
+		response llm.Response
+		modelErr error
+		want     int
+	}{
+		{
+			name:     "clean usage is charged as reported",
+			response: llm.Response{Usage: llm.Usage{InputTokens: 10_000, OutputTokens: 400}},
+			want:     10_400,
+		},
+		{
+			name:     "provider error writes off the reservation",
+			response: llm.Response{Usage: llm.Usage{InputTokens: 10_000}},
+			modelErr: errors.New("provider down"),
+			want:     reserved,
+		},
+		{
+			name:     "no reported usage writes off the reservation",
+			response: llm.Response{UsageIncomplete: true},
+			want:     reserved,
+		},
+		{
+			// The observed regression: one failed attempt used to bill 30 000 for
+			// a call whose successful attempt reported 10 400.
+			name: "one unaccounted attempt costs its prompt, not the reservation",
+			response: llm.Response{
+				Usage:           llm.Usage{InputTokens: 10_000, OutputTokens: 400},
+				UsageIncomplete: true, UnknownUsageAttempts: 1,
+			},
+			want: 20_400,
+		},
+		{
+			name: "unaccounted attempts never exceed the reservation",
+			response: llm.Response{
+				Usage:           llm.Usage{InputTokens: 10_000, OutputTokens: 400},
+				UsageIncomplete: true, UnknownUsageAttempts: 5,
+			},
+			want: reserved,
+		},
+		{
+			name: "a total-only provider prices each unaccounted attempt at the total",
+			response: llm.Response{
+				Usage:           llm.Usage{TotalTokens: 1_000},
+				UsageIncomplete: true, UnknownUsageAttempts: 2,
+			},
+			want: 3_000,
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := chargeForModelCall(test.response, test.modelErr, reserved); got != test.want {
+				t.Fatalf("charge = %d, want %d", got, test.want)
+			}
+		})
 	}
 }
 

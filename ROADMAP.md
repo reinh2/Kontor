@@ -321,6 +321,34 @@ Boxes are unchecked because they are open.
 - [ ] **LLM is the `fake` deterministic adapter by default.** OpenRouter is
   wired but needs a key, a chosen model, cost controls, and prompt/version
   pinning validated against a real model.
+- [ ] **The deterministic demo adapter is not a valid conversational booking
+  simulation.** It ignores the requested service, date, and time and always
+  drives the fixed Haircut/Alex/next-Thursday scenario. It is useful for a
+  repeatable safety smoke test, but misleading in the public widget and unable
+  to demonstrate natural-language booking. **Fix:** label it as a scripted
+  smoke scenario, and make the default demo either collect structured inputs
+  or use a provider-backed fixture/evaluation that honours the request.
+- [x] **The real-model booking protocol is directed for safe recovery.** The
+  provider-neutral prompt and tool contracts now require service → staff → slot
+  discovery, require a concise email/E.164-phone clarification before booking,
+  and require a clarification (not speculative retry) after `fix_arguments`.
+  Contacts are extracted only from the authenticated customer's saved message;
+  the gateway still derives booking identity from trusted context. Regressions
+  cover no-contact requests, schema-invalid calls, and a later valid contact.
+  **Remaining:** a versioned multilingual provider/model eval suite and its
+  release gate (valid booking, unavailable slot, malformed arguments, retry,
+  and confirmation).
+- [x] **A stale confirmation card no longer survives a newer or failed turn.**
+  A non-consent turn invalidates live proposals server-side, and every durable
+  turn event includes the explicit `pending_confirmation_active` snapshot. The
+  widget removes an old card on a false snapshot; clarification and
+  superseding-intent regressions cover the database state and SSE payload.
+- [ ] **No end-to-end provider contract test runs in CI.** Unit tests validate
+  the normalized OpenRouter request/response adapter against a local HTTP
+  fixture, but CI never exercises a model with the actual tool definitions and
+  a seeded catalogue. **Fix:** run a budget-capped, opt-in nightly evaluation
+  against the selected provider/model, record only redacted traces and model
+  metadata, and keep deterministic protocol tests mandatory on every PR.
 - [ ] **Calendar sync is a `noop`.** No external calendar (Google/Microsoft)
   read/write; double-booking protection is DB-only.
 - [x] **CRM tools return `NOT_IMPLEMENTED`.** No HubSpot/CSV adapter. (Stage 4) — **Done.** `internal/crm` with LogCRM + HubSpotCRM drivers.
@@ -356,6 +384,19 @@ Boxes are unchecked because they are open.
   `schedule_version` checks, and transactional reminder cancel/update, wired
   into the SPA calendar (create modal, detail drawer, conflict handling).
   (Stage 5, authorized by Stage 6 sessions) — **Done.**
+- [x] **Operator navigation and design-package integration.** The sidebar and
+  responsive mobile navigation now include Inbox, Analytics, and Settings.
+  **Overview** is the canonical label while `#/` and `#/dashboard` remain
+  compatible Dashboard aliases; Runs and Calendar routes are unchanged. Inbox
+  uses tenant-scoped escalated runs, Analytics uses the authoritative dashboard
+  aggregate, and Settings reads the authenticated operator/tenant session with
+  explicit owner/staff boundaries. Each has loading, retryable error, and
+  applicable empty states. The full `Kontor agent trace screen` package was
+  inventoried and mapped into the embedded widget/operator UI; provenance,
+  asset review, and per-specimen adoption are recorded in
+  [`docs/design-integration.md`](docs/design-integration.md). No new frontend
+  build pipeline or dependency was introduced; embedded-asset regression tests
+  cover the new routes and safe widget components. (2026-07-23)
 
 ### Data, migrations, and privacy
 - [ ] **No rollback path.** Migrations are forward-only and checksum-guarded;
@@ -374,6 +415,10 @@ Boxes are unchecked because they are open.
 ### Testing and QA
 - [ ] **No browser/E2E tests** for the widget, **no load tests**, and **no
   accessibility audit** of the vanilla `kontor.js` widget.
+- [ ] **No browser regression coverage for pending-confirmation state across
+  provider failures or clarification replies.** A user can see an old booking
+  card beside a newer model response; this needs an end-to-end test using the
+  widget's persisted conversation state.
 - [ ] **No Telegram contract test** against a fake Bot API in CI (the handler is
   unit-tested; the wiring is not exercised in CI).
 

@@ -3,9 +3,11 @@ package tools
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -13,6 +15,12 @@ const (
 	maxSlotSearchRange        = 31 * 24 * time.Hour
 	defaultMinBookingLeadTime = 15 * time.Minute
 	defaultMaxBookingHorizon  = 365 * 24 * time.Hour
+	// maxModelFacingSlots bounds one find_slots result. Every slot carries a
+	// signed token of several hundred bytes, so an unbounded day search used to
+	// return ~26 KB per call and exhausted the per-conversation token budget
+	// after two or three searches. Slots arrive in chronological order, so the
+	// cap keeps the earliest options and reports the remainder as truncated.
+	maxModelFacingSlots = 12
 )
 
 type Config struct {
@@ -111,6 +119,10 @@ func (g *Gateway) Execute(ctx context.Context, trusted TrustedContext, call Call
 	if capability := requiredCapability(call.Name); !trusted.Allows(capability) {
 		return g.failure(out, CodePolicyDenied, "authenticated principal is not permitted to call this tool", false, "escalate")
 	}
+	arguments, err = g.restoreFrozenAction(ctx, trusted, call.Name, arguments)
+	if err != nil {
+		return g.failure(out, CodeInvalidArgument, err.Error(), false, "fix_arguments")
+	}
 
 	switch call.Name {
 	case ToolListServices:
@@ -130,6 +142,65 @@ func (g *Gateway) Execute(ctx context.Context, trusted TrustedContext, call Call
 	default:
 		return g.failure(out, CodeNotImplemented, "tool is part of the v1 allowlist but is not implemented", false, "escalate")
 	}
+}
+
+// adoptIdempotencyKey returns the model's key when it supplied one, and
+// otherwise derives it from the server's own view of the action and writes it
+// back into the argument object so it enters the confirmation binding.
+//
+// The key is plumbing with no semantic content, yet every model invents it
+// differently — an email address, a timestamp carrying a "+" offset — and each
+// variant trips the contract pattern and kills the booking after the customer
+// has already chosen a slot. Deriving it from verified facts makes it identical
+// for the same appointment, different for any other, and stable across the
+// confirming turn, which is exactly what backend idempotency needs.
+func adoptIdempotencyKey(
+	object map[string]any,
+	supplied string,
+	trusted TrustedContext,
+	tool string,
+	facts ...string,
+) string {
+	if strings.TrimSpace(supplied) != "" {
+		return supplied
+	}
+	parts := append([]string{trusted.TenantID, trusted.ConversationID, trusted.CustomerID, tool}, facts...)
+	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	derived := "srv-" + hex.EncodeToString(digest[:])
+	object["idempotency_key"] = derived
+	return derived
+}
+
+// restoreFrozenAction replaces a confirming call's arguments with the exact
+// action the server froze when it showed the proposal. ADR-001 binds the
+// mutation to the proposed facts, so re-reading them from the model's echo adds
+// nothing and costs everything: a model asked to reproduce a ~600-character
+// slot token verbatim corrupts it and the booking dies after the customer
+// already consented. Nothing here trusts model input beyond the confirmation
+// id, which must match the conversation's own live proposal for this tool.
+func (g *Gateway) restoreFrozenAction(
+	ctx context.Context,
+	trusted TrustedContext,
+	tool string,
+	arguments map[string]any,
+) (map[string]any, error) {
+	confirmationID, present := arguments["confirmation_id"].(string)
+	if !present || confirmationID == "" {
+		return arguments, nil
+	}
+	state, found, err := g.confirmations.Latest(ctx, trusted.TenantID, trusted.CustomerID, trusted.ConversationID, g.now())
+	if err != nil || !found || state.Proposal.ID != confirmationID || state.Binding.Tool != tool ||
+		len(state.Binding.ArgumentsJSON) == 0 {
+		// Leave the call untouched. The confirmation checks downstream still
+		// decide whether it may execute.
+		return arguments, nil
+	}
+	var frozen map[string]any
+	if err := json.Unmarshal(state.Binding.ArgumentsJSON, &frozen); err != nil {
+		return nil, errors.New("the frozen confirmed action could not be decoded")
+	}
+	frozen["confirmation_id"] = confirmationID
+	return frozen, nil
 }
 
 func requiredCapability(tool string) Capability {
@@ -163,7 +234,7 @@ func (g *Gateway) listStaff(ctx context.Context, trusted TrustedContext, result 
 	serviceID := arguments["service_id"].(string)
 	staff, err := g.backend.ListStaff(ctx, trusted.TenantID, serviceID)
 	if err != nil {
-		return g.backendFailure(result, err)
+		return g.discoveryFailure(result, err)
 	}
 	return g.success(result, ListStaffData{Staff: nonNilStaff(staff)}, false)
 }
@@ -197,11 +268,20 @@ func (g *Gateway) findSlots(ctx context.Context, trusted TrustedContext, result 
 	}
 	available, err := g.backend.FindSlots(ctx, query)
 	if err != nil {
-		return g.backendFailure(result, err)
+		return g.discoveryFailure(result, err)
 	}
 	now = g.now()
-	slots := make([]Slot, 0, len(available))
+	capacity := len(available)
+	if capacity > maxModelFacingSlots {
+		capacity = maxModelFacingSlots
+	}
+	slots := make([]Slot, 0, capacity)
+	truncated := false
 	for _, candidate := range available {
+		if len(slots) == maxModelFacingSlots {
+			truncated = true
+			break
+		}
 		if candidate.ServiceID == "" {
 			candidate.ServiceID = query.ServiceID
 		}
@@ -244,7 +324,7 @@ func (g *Gateway) findSlots(ctx context.Context, trusted TrustedContext, result 
 			Timezone: candidate.Timezone, ExpiresAt: expiresAt,
 		})
 	}
-	return g.success(result, FindSlotsData{Slots: slots, AvailabilityAsOf: now}, false)
+	return g.success(result, FindSlotsData{Slots: slots, AvailabilityAsOf: now, Truncated: truncated}, false)
 }
 
 type createBookingArguments struct {
@@ -263,11 +343,11 @@ func (g *Gateway) createBooking(ctx context.Context, trusted TrustedContext, res
 	}
 	trustedCustomer, ok := trustedCustomerProfile(trusted)
 	if !ok {
-		return g.failure(result, CodePolicyDenied, "trusted customer profile is incomplete", false, "escalate")
+		return g.failure(result, CodeContactRequired, "an email or E.164 phone number is required before booking", false, "ask_customer")
 	}
-	// Customer identity is authenticated server-side. The model-facing schema
-	// still requires a customer object so malformed calls are rejected, but the
-	// model's values never enter the confirmation binding or booking command.
+	// Customer identity is authenticated server-side. A legacy customer object
+	// may be accepted for compatibility, but model values never enter the
+	// confirmation binding or booking command.
 	arguments.Customer = trustedCustomer
 	object["customer"] = trustedCustomer
 	now := g.now()
@@ -285,6 +365,9 @@ func (g *Gateway) createBooking(ctx context.Context, trusted TrustedContext, res
 	if !g.slotWithinBookingWindow(claims.StartAt, claims.EndAt, now) {
 		return g.failure(result, CodeSlotUnavailable, "slot is outside the allowed booking window; find a new slot", false, "find_another_slot")
 	}
+	arguments.IdempotencyKey = adoptIdempotencyKey(object, arguments.IdempotencyKey,
+		trusted, ToolCreateBooking, claims.ServiceID, claims.StaffID,
+		claims.StartAt.UTC().Format(time.RFC3339), claims.EndAt.UTC().Format(time.RFC3339))
 	binding := confirmationBinding(trusted, ToolCreateBooking, object)
 	if arguments.ConfirmationID == "" {
 		confirmationExpiresAt := now.Add(g.confirmationTTL)
@@ -390,6 +473,9 @@ func (g *Gateway) rescheduleBooking(ctx context.Context, trusted TrustedContext,
 	if !g.slotWithinBookingWindow(claims.StartAt, claims.EndAt, now) {
 		return g.failure(result, CodeSlotUnavailable, "slot is outside the allowed booking window; find a new slot", false, "find_another_slot")
 	}
+	arguments.IdempotencyKey = adoptIdempotencyKey(object, arguments.IdempotencyKey,
+		trusted, ToolReschedule, arguments.BookingID, claims.StaffID,
+		claims.StartAt.UTC().Format(time.RFC3339), claims.EndAt.UTC().Format(time.RFC3339))
 	binding := confirmationBinding(trusted, ToolReschedule, object)
 	if arguments.ConfirmationID == "" {
 		confirmationExpiresAt := now.Add(g.confirmationTTL)
@@ -453,6 +539,8 @@ func (g *Gateway) cancelBooking(ctx context.Context, trusted TrustedContext, res
 		return g.failure(result, CodeInvalidArgument, "arguments could not be decoded", false, "fix_arguments")
 	}
 	now := g.now()
+	arguments.IdempotencyKey = adoptIdempotencyKey(object, arguments.IdempotencyKey,
+		trusted, ToolCancel, arguments.BookingID)
 	binding := confirmationBinding(trusted, ToolCancel, object)
 	if arguments.ConfirmationID == "" {
 		proposal, err := g.confirmations.Propose(ctx, binding, ConfirmationProposal{
@@ -548,6 +636,22 @@ func (g *Gateway) failure(result Result, code ErrorCode, message string, retryab
 	result.Confirmation = nil
 	result.Error = &ToolError{Code: code, Message: message, Retryable: retryable, Resolution: resolution}
 	return result
+}
+
+// discoveryFailure maps read-only catalogue lookups. list_staff and find_slots
+// carry no ownership: their identifiers name tenant-wide catalogue rows the
+// model just read, so an unmatched one is a generated-argument mistake (a model
+// passing a service UUID as staff_id) and not a refusal worth handing the
+// customer to a person. Every mutating tool keeps the terminal refusal.
+func (g *Gateway) discoveryFailure(result Result, err error) Result {
+	if errors.Is(err, ErrNotFoundOrNotOwned) {
+		return g.failure(
+			result, CodeInvalidArgument,
+			"service_id or staff_id does not match this tenant's catalogue; re-read the list_services and list_staff results and use their UUIDs",
+			false, "fix_arguments",
+		)
+	}
+	return g.backendFailure(result, err)
 }
 
 func (g *Gateway) backendFailure(result Result, err error) Result {

@@ -92,9 +92,8 @@ func (h *Handler) createConversation(w http.ResponseWriter, r *http.Request) {
 	// Validate at the boundary so a rejected profile answers 400 with a safe,
 	// self-authored message, and any error from the service is treated as
 	// internal rather than echoed back to the client.
-	if strings.TrimSpace(input.DisplayName) == "" ||
-		(strings.TrimSpace(input.Email) == "" && strings.TrimSpace(input.Phone) == "") {
-		writeProblem(w, http.StatusBadRequest, "conversation rejected", "display_name and at least one of email or phone are required")
+	if strings.TrimSpace(input.DisplayName) == "" {
+		writeProblem(w, http.StatusBadRequest, "conversation rejected", "display_name is required")
 		return
 	}
 	created, err := h.app.CreateConversation(r.Context(), conversations.Profile{

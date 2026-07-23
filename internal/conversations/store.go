@@ -11,12 +11,18 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/reinhlord/kontor/internal/platform/ids"
+)
+
+var (
+	emailInMessage = regexp.MustCompile(`(?i)\b[a-z0-9.!#$%&'*+/=?^_` + "`" + `{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\b`)
+	phoneInMessage = regexp.MustCompile(`\+[1-9][0-9]{7,14}\b`)
 )
 
 var (
@@ -68,9 +74,6 @@ type Profile struct {
 func (s *Store) CreateDemo(ctx context.Context, tenantID string, profile Profile, tokenBudget int) (Conversation, error) {
 	if tenantID == "" || strings.TrimSpace(profile.DisplayName) == "" || tokenBudget < 1 {
 		return Conversation{}, errors.New("invalid conversation input")
-	}
-	if profile.Email == "" && profile.Phone == "" {
-		return Conversation{}, errors.New("email or phone is required")
 	}
 	capabilityToken, capabilityHash, err := newCapabilityToken()
 	if err != nil {
@@ -127,9 +130,6 @@ func (s *Store) EnsureChannelConversation(
 	if strings.TrimSpace(profile.DisplayName) == "" {
 		return Conversation{}, errors.New("display name is required")
 	}
-	if profile.Email == "" && profile.Phone == "" {
-		return Conversation{}, errors.New("email or phone is required")
-	}
 
 	existing, err := s.channelConversation(ctx, tenantID, channel, channelRef)
 	if err == nil {
@@ -173,6 +173,33 @@ func (s *Store) EnsureChannelConversation(
 		return Conversation{}, fmt.Errorf("commit channel conversation: %w", err)
 	}
 	return s.channelConversation(ctx, tenantID, channel, channelRef)
+}
+
+// CaptureContactFromMessage persists only a contact string literally supplied
+// in this authenticated customer's saved message. It never lets model output
+// write customer identity, and it fills missing data rather than replacing an
+// existing profile value.
+func (s *Store) CaptureContactFromMessage(
+	ctx context.Context, tenantID, customerID, message string,
+) (Profile, error) {
+	email := emailInMessage.FindString(message)
+	phone := phoneInMessage.FindString(message)
+	var profile Profile
+	err := s.pool.QueryRow(ctx, `
+		UPDATE customers
+		SET email=COALESCE(NULLIF(email,''),NULLIF($3,'')),
+		    phone=COALESCE(NULLIF(phone,''),NULLIF($4,''))
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING display_name,COALESCE(email,''),COALESCE(phone,'')`,
+		tenantID, customerID, email, phone).
+		Scan(&profile.DisplayName, &profile.Email, &profile.Phone)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Profile{}, ErrNotFound
+	}
+	if err != nil {
+		return Profile{}, fmt.Errorf("capture customer contact: %w", err)
+	}
+	return profile, nil
 }
 
 func (s *Store) channelConversation(ctx context.Context, tenantID, channel, channelRef string) (Conversation, error) {
@@ -411,4 +438,48 @@ func IsHumanRequest(text string) bool {
 	default:
 		return false
 	}
+}
+
+// RecalibrateInflatedUsage recalculates tokens_used for open conversations
+// based on actual provider-reported usage from agent_iterations. This corrects
+// inflated accounting caused by the pre-fix 1:1 byte-to-token estimator.
+//
+// For successful iterations, uses prompt_tokens + completion_tokens (real).
+// For failed iterations (provider returned 0 usage), applies a flat penalty
+// per iteration as a conservative stand-in. The penalty is deliberately low
+// because the failed call did not consume real budget on the provider side.
+//
+// This is idempotent: running it when usage is already correct changes nothing
+// meaningful (the recalculated sum equals or slightly differs from current).
+// It only touches conversations with status='open' and tokens_reserved=0.
+func (s *Store) RecalibrateInflatedUsage(ctx context.Context, tenantID string, failedIterationPenalty int) (int, error) {
+	if failedIterationPenalty <= 0 {
+		failedIterationPenalty = 500
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE conversations c
+		SET tokens_used = recalc.real_usage, updated_at = now()
+		FROM (
+			SELECT r.conversation_id,
+			       COALESCE(SUM(
+			           CASE WHEN i.prompt_tokens + i.completion_tokens > 0
+			                THEN i.prompt_tokens + i.completion_tokens
+			                ELSE $2
+			           END
+			       ), 0)::integer AS real_usage
+			FROM agent_runs r
+			JOIN agent_iterations i ON i.tenant_id = r.tenant_id AND i.agent_run_id = r.id
+			WHERE r.tenant_id = $1
+			GROUP BY r.conversation_id
+		) recalc
+		WHERE c.tenant_id = $1
+		  AND c.id = recalc.conversation_id
+		  AND c.status = 'open'
+		  AND c.tokens_reserved = 0
+		  AND c.tokens_used > recalc.real_usage`,
+		tenantID, failedIterationPenalty)
+	if err != nil {
+		return 0, fmt.Errorf("recalibrate inflated token usage: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }

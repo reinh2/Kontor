@@ -296,14 +296,17 @@ func (a *OpenRouterAdapter) Complete(ctx context.Context, request Request) (Resp
 
 	var totalUsage Usage
 	usageIncomplete := false
+	unknownAttempts := 0
 	for attempt := 1; attempt <= a.maxAttempts; attempt++ {
 		response, attemptErr := a.completeAttempt(requestContext, body)
 		if attemptErr != nil && response.Usage.Total() <= 0 {
 			usageIncomplete = true
+			unknownAttempts++
 		}
 		addProviderUsage(&totalUsage, response.Usage)
 		response.Usage = totalUsage
 		response.UsageIncomplete = usageIncomplete
+		response.UnknownUsageAttempts = unknownAttempts
 		if attemptErr == nil {
 			return response, nil
 		}
@@ -316,7 +319,9 @@ func (a *OpenRouterAdapter) Complete(ctx context.Context, request Request) (Resp
 			return response, fmt.Errorf("openrouter: retry wait: %w", err)
 		}
 	}
-	return Response{Usage: totalUsage, UsageIncomplete: usageIncomplete}, errors.New("openrouter: retry loop ended unexpectedly")
+	return Response{
+		Usage: totalUsage, UsageIncomplete: usageIncomplete, UnknownUsageAttempts: unknownAttempts,
+	}, errors.New("openrouter: retry loop ended unexpectedly")
 }
 
 func (a *OpenRouterAdapter) completeAttempt(ctx context.Context, body []byte) (Response, error) {
@@ -432,6 +437,11 @@ func shouldRetryOpenRouter(ctx context.Context, err error) bool {
 			http.StatusInternalServerError, http.StatusBadGateway,
 			http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 			return true
+		case http.StatusOK:
+			// HTTP 200 with finish_reason "error" is a transient upstream
+			// provider failure (e.g. MALFORMED_FUNCTION_CALL on Gemini).
+			// Retrying often succeeds on the next attempt.
+			return true
 		default:
 			return false
 		}
@@ -533,12 +543,13 @@ func (a *OpenRouterAdapter) toOpenRouterRequest(request Request) (openRouterRequ
 			if !json.Valid(parameters) {
 				return openRouterRequest{}, fmt.Errorf("openrouter: tool %q has invalid parameter schema", tool.Name)
 			}
+			parameters = sanitizeParametersForProvider(parameters)
 			wire.Tools[i] = openRouterTool{
 				Type: "function",
 				Function: openRouterFunctionTool{
 					Name:        tool.Name,
 					Description: tool.Description,
-					Parameters:  append(json.RawMessage(nil), parameters...),
+					Parameters:  parameters,
 				},
 			}
 		}
@@ -675,4 +686,113 @@ func embeddedOpenRouterStatus(raw json.RawMessage) (int, bool) {
 	}
 	numeric, err := strconv.Atoi(strings.TrimSpace(textCode))
 	return numeric, err == nil && numeric >= 400 && numeric <= 599
+}
+
+// providerUnsupportedSchemaKeys lists JSON Schema keywords that some model
+// providers (notably Google Gemini via OpenRouter) do not support in function
+// parameter schemas. When present, these keys cause the model to silently fall
+// back to text-only responses instead of emitting tool calls.
+var providerUnsupportedSchemaKeys = map[string]struct{}{
+	"$schema":       {},
+	"$id":           {},
+	"$ref":          {},
+	"$defs":         {},
+	"defs":          {},
+	"pattern":       {},
+	"maxProperties": {},
+	"minProperties": {},
+	"minLength":     {},
+	"maxLength":     {},
+	"anyOf":         {},
+	"oneOf":         {},
+	"allOf":         {},
+	"format":        {},
+}
+
+// describedSchemaKeys are the stripped keywords whose meaning is folded into the
+// node's description. A model that never sees `pattern` or `format` generates
+// values the gateway then rejects (a timestamp-shaped idempotency_key, for
+// example), so the constraint has to survive the strip as prose. The order is
+// fixed to keep the wire representation deterministic.
+var describedSchemaKeys = []string{"format", "pattern", "minLength", "maxLength"}
+
+// sanitizeParametersForProvider returns a copy of the JSON Schema with keys
+// unsupported by common Chat Completions providers removed. The server-side
+// tool gateway keeps the original full Draft 2020-12 schemas for validation;
+// only the wire representation sent to the model is simplified.
+func sanitizeParametersForProvider(raw json.RawMessage) json.RawMessage {
+	var parsed any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return raw
+	}
+	cleaned := stripUnsupportedSchemaKeys(parsed)
+	out, err := json.Marshal(cleaned)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func stripUnsupportedSchemaKeys(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for key, child := range typed {
+			if _, unsupported := providerUnsupportedSchemaKeys[key]; unsupported {
+				continue
+			}
+			result[key] = stripUnsupportedSchemaKeys(child)
+		}
+		if note := strippedConstraintNote(typed); note != "" {
+			description, _ := result["description"].(string)
+			if description != "" {
+				description += " "
+			}
+			result["description"] = description + note
+		}
+		return result
+	case []any:
+		result := make([]any, len(typed))
+		for i, child := range typed {
+			result[i] = stripUnsupportedSchemaKeys(child)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+// strippedConstraintNote renders the value constraints removed from one schema
+// node as a sentence the model can act on. It reports only the server's own
+// contract vocabulary, never instance data.
+func strippedConstraintNote(node map[string]any) string {
+	constraints := make([]string, 0, len(describedSchemaKeys))
+	for _, key := range describedSchemaKeys {
+		value, present := node[key]
+		if !present {
+			continue
+		}
+		switch key {
+		case "format":
+			if format, ok := value.(string); ok {
+				constraints = append(constraints, "must be a valid "+format)
+			}
+		case "pattern":
+			if pattern, ok := value.(string); ok {
+				constraints = append(constraints, "must match the regular expression "+pattern)
+			}
+		case "minLength":
+			if length, ok := value.(float64); ok {
+				constraints = append(constraints, fmt.Sprintf("at least %d characters", int(length)))
+			}
+		case "maxLength":
+			if length, ok := value.(float64); ok {
+				constraints = append(constraints, fmt.Sprintf("at most %d characters", int(length)))
+			}
+		}
+	}
+	if len(constraints) == 0 {
+		return ""
+	}
+	return "Constraints: " + strings.Join(constraints, "; ") + "."
 }

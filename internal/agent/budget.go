@@ -39,14 +39,20 @@ type TokenEstimator interface {
 	Estimate(request llm.Request) (int, error)
 }
 
-// ConservativeTokenEstimator reserves at least one token per serialized byte,
-// plus chat-template overhead and the requested maximum completion. Byte count
-// deliberately overestimates normal BPE tokenization and avoids relying on a
-// provider-specific tokenizer.
+// ConservativeTokenEstimator converts serialized byte counts to a token
+// estimate using a configurable bytes-per-token ratio, then adds chat-template
+// overhead and the requested maximum completion. The default ratio of 3
+// bytes/token safely overestimates normal BPE tokenization (~3.5–4 bytes/token
+// for English/JSON) without the extreme 1:1 inflation that exhausts budgets
+// on a single turn when tool schemas are large.
 type ConservativeTokenEstimator struct {
 	BaseOverhead       int
 	PerMessageOverhead int
 	PerToolOverhead    int
+	// BytesPerToken controls the byte-to-token conversion ratio. A value below
+	// 1 defaults to 3, which is conservatively below the real BPE average of
+	// ~3.5–4 bytes/token for JSON and English text.
+	BytesPerToken int
 	// ProviderAttempts reserves the worst-case cost of retries performed inside
 	// one Adapter.Complete call. A value below 1 means one attempt.
 	ProviderAttempts int
@@ -69,18 +75,25 @@ func (e ConservativeTokenEstimator) Estimate(request llm.Request) (int, error) {
 	if perTool <= 0 {
 		perTool = 64
 	}
+	bytesPerToken := e.BytesPerToken
+	if bytesPerToken < 1 {
+		bytesPerToken = 4
+	}
 
-	bytes := 0
+	rawBytes := 0
 	for _, message := range request.Messages {
-		bytes += len(message.Role) + len(message.Content) + len(message.Name) + len(message.ToolCallID)
+		rawBytes += len(message.Role) + len(message.Content) + len(message.Name) + len(message.ToolCallID)
 		for _, call := range message.ToolCalls {
-			bytes += len(call.ID) + len(call.Name) + len(call.Arguments)
+			rawBytes += len(call.ID) + len(call.Name) + len(call.Arguments)
 		}
 	}
 	for _, tool := range request.Tools {
-		bytes += len(tool.Name) + len(tool.Description) + len(tool.Parameters)
+		rawBytes += len(tool.Name) + len(tool.Description) + len(tool.Parameters)
 	}
-	perAttempt := request.MaxOutputTokens + bytes + base +
+	// Ceiling division: ensures at least one token per byte-chunk.
+	contentTokens := (rawBytes + bytesPerToken - 1) / bytesPerToken
+
+	perAttempt := request.MaxOutputTokens + contentTokens + base +
 		(len(request.Messages) * perMessage) + (len(request.Tools) * perTool)
 	attempts := e.ProviderAttempts
 	if attempts < 1 {

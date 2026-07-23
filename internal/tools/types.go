@@ -121,6 +121,7 @@ type ErrorCode string
 
 const (
 	CodeInvalidArgument       ErrorCode = "INVALID_ARGUMENT"
+	CodeContactRequired       ErrorCode = "CONTACT_REQUIRED"
 	CodeToolNotAllowed        ErrorCode = "TOOL_NOT_ALLOWED"
 	CodePolicyDenied          ErrorCode = "POLICY_DENIED"
 	CodeNotFoundOrNotOwned    ErrorCode = "NOT_FOUND_OR_NOT_OWNED"
@@ -197,6 +198,9 @@ type ListStaffData struct {
 type FindSlotsData struct {
 	Slots            []Slot    `json:"slots"`
 	AvailabilityAsOf time.Time `json:"availability_as_of"`
+	// Truncated reports that more slots matched than the result carries. The
+	// listed slots are the earliest ones; a narrower range returns the rest.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 type CustomerProfile struct {

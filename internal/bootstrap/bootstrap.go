@@ -79,6 +79,16 @@ func Build(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, logger *s
 	logger.InfoContext(ctx, "tenant runtime ready",
 		"tenant_id", cfg.Tenant.ID, "tenant_mode", "scoped", "llm_provider", cfg.LLM.Provider,
 		"max_iterations", cfg.Agent.MaxIterations, "conversation_token_budget", cfg.Agent.ConversationTokenBudget)
+
+	// One-time recalibration: correct inflated token_used from the pre-fix 1:1
+	// byte-to-token estimator. Only affects open conversations with no in-flight
+	// reservations and current usage above the provider-reported sum.
+	if recalibrated, err := conversationStore.RecalibrateInflatedUsage(ctx, cfg.Tenant.ID, 500); err != nil {
+		logger.WarnContext(ctx, "token recalibration failed (non-fatal)", "error", err)
+	} else if recalibrated > 0 {
+		logger.InfoContext(ctx, "recalibrated inflated token budgets", "conversations", recalibrated)
+	}
+
 	return &Components{
 		Application: application, Conversations: conversationStore, Trace: traceStore,
 		Confirmations: confirmationStore, Runner: runner,

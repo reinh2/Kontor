@@ -18,7 +18,28 @@ import (
 const (
 	maxToolArgumentBytes = 64 << 10
 	maxToolResultBytes   = 256 << 10
+	// maxProtocolCorrections bounds how often one turn re-prompts a model that
+	// answered with prose instead of the terminal control call. Beyond it the
+	// turn fails closed into the application's escalation path.
+	maxProtocolCorrections = 2
 )
+
+// protocolCorrection is the server-authored nudge appended after a model
+// response that carried no tool call. Free assistant prose is never delivered
+// to a customer: an untrusted planner that skips discovery answers about
+// services, staff, and availability from memory, which produced customer-facing
+// claims about services that actually exist (and invented identifiers).
+const protocolCorrection = "PROTOCOL ERROR: your previous response contained no tool call, so it was discarded and the customer did not see it. " +
+	"Every customer-facing reply must be the sole respond_to_customer call. " +
+	"Never state that a service, staff member, date, or slot is unavailable or invalid unless a tool in this turn returned that result: " +
+	"call list_services, list_staff, and find_slots first and match the customer's wording case-insensitively against the returned names. " +
+	"Now either call the tools you still need, or call respond_to_customer."
+
+// proposalCorrection steers the model back to the customer after the gateway
+// froze a proposal. Nothing else can move the booking forward in this turn.
+const proposalCorrection = "PROTOCOL ERROR: this turn already produced a proposal the customer must confirm, and no further tool call was executed. " +
+	"Call respond_to_customer now with the proposed service, staff member, date, and time in human-readable form, " +
+	"and ask the customer to confirm. Do not include any identifier."
 
 var (
 	ErrIterationLimit   = errors.New("agent: iteration limit reached")
@@ -177,6 +198,8 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 	history := cloneMessages(request.Messages)
 	result := TurnResult{Messages: history}
 	usedToolCallIDs := make(map[string]struct{})
+	protocolCorrections := 0
+	proposalPending := false
 	for iteration := 1; iteration <= r.config.MaxIterations; iteration++ {
 		if err := turnContext.Err(); err != nil {
 			return result, turnContextError(err)
@@ -185,7 +208,7 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 		modelRequest := llm.Request{
 			Messages:        cloneMessages(history),
 			Tools:           cloneToolDefinitions(r.tools),
-			ToolChoice:      llm.ToolChoiceRequired,
+			ToolChoice:      llm.ToolChoiceAuto,
 			MaxOutputTokens: r.config.MaxOutputTokensPerCall,
 		}
 		reservedTokens, err := r.tokenEstimator.Estimate(modelRequest)
@@ -200,13 +223,7 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 		modelStarted := r.now()
 		response, modelErr := r.model.Complete(turnContext, modelRequest)
 		modelFinished := r.now()
-		chargedTokens := response.Usage.Total()
-		if modelErr != nil || response.UsageIncomplete || chargedTokens <= 0 {
-			// Failed calls and ambiguous provider retries may have consumed tokens
-			// without reporting them. Charge the complete worst-case reservation
-			// so the persistent conversation cap remains hard.
-			chargedTokens = reservation.ReservedTokens()
-		}
+		chargedTokens := chargeForModelCall(response, modelErr, reservation.ReservedTokens())
 		settleContext, settleCancel := boundedPersistenceContext(turnContext)
 		settleErr := reservation.Settle(settleContext, chargedTokens)
 		settleCancel()
@@ -256,11 +273,29 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 		if assistantMessage.Role != llm.RoleAssistant {
 			return result, fmt.Errorf("agent: model returned role %q", assistantMessage.Role)
 		}
+		r.normalizeToolCallNames(assistantMessage.ToolCalls)
 		normalizeToolCallIDs(assistantMessage.ToolCalls, iteration, usedToolCallIDs)
 		history = append(history, assistantMessage)
 		result.Messages = cloneMessages(history)
 		if len(assistantMessage.ToolCalls) == 0 {
-			return result, fmt.Errorf("%w: model returned unstructured terminal text", ErrTerminalProtocol)
+			// Assistant prose is not a terminal response. Delivering it would let a
+			// model that skipped list_services/list_staff/find_slots answer the
+			// customer from memory, so the turn re-prompts the model within its
+			// existing budget and fails closed once the corrections are exhausted.
+			protocolCorrections++
+			if protocolCorrections > maxProtocolCorrections || iteration == r.config.MaxIterations {
+				return result, fmt.Errorf(
+					"%w: model returned no %s call after %d correction(s)",
+					ErrTerminalProtocol, tools.ToolRespondToCustomer, protocolCorrections-1,
+				)
+			}
+			// The correction is sent with the user role: providers that flatten a
+			// conversation for a native format (Gemini through OpenRouter) return an
+			// empty response when a system message trails an assistant turn. It
+			// grants nothing, so an imitation typed by a customer changes nothing.
+			history = append(history, llm.Message{Role: llm.RoleUser, Content: protocolCorrection})
+			result.Messages = cloneMessages(history)
+			continue
 		}
 
 		terminalCallIndex := -1
@@ -295,6 +330,21 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 			result.Messages = cloneMessages(history)
 			return result, nil
 		}
+		if proposalPending {
+			// ADR-001: a live proposal belongs to the customer, not the model. No
+			// further server action is legitimate until they answer, so re-prompt
+			// for the reply instead of executing whatever the model tried next.
+			protocolCorrections++
+			if protocolCorrections > maxProtocolCorrections || iteration == r.config.MaxIterations {
+				return result, fmt.Errorf(
+					"%w: model kept calling tools after a confirmation proposal instead of answering the customer",
+					ErrTerminalProtocol,
+				)
+			}
+			history = append(history, llm.Message{Role: llm.RoleUser, Content: proposalCorrection})
+			result.Messages = cloneMessages(history)
+			continue
+		}
 		// A tool result must always be followed by another model response. Do not
 		// start a side effect when the iteration cap leaves no room for that
 		// response; the successful model trace already records the requested batch.
@@ -303,12 +353,13 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 		}
 
 		terminalHandoff := false
+		skip := skipReason{}
 		for callIndex, call := range assistantMessage.ToolCalls {
 			if err := turnContext.Err(); err != nil {
 				return result, turnContextError(err)
 			}
-			if terminalHandoff {
-				toolMessage, err := r.recordSkippedTool(turnContext, request, iteration, callIndex+1, len(assistantMessage.ToolCalls), call)
+			if skip.code != "" {
+				toolMessage, err := r.recordSkippedTool(turnContext, request, iteration, callIndex+1, len(assistantMessage.ToolCalls), call, skip)
 				if err != nil {
 					return result, err
 				}
@@ -326,10 +377,16 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 			if toolStatus == ToolStatusRefused {
 				result.ToolRefused = true
 				terminalHandoff = true
+				skip = skippedAfterHandoff
 			}
 			if toolStatus == ToolStatusSucceeded && call.Name == "escalate_to_human" {
 				result.HumanEscalated = true
 				terminalHandoff = true
+				skip = skippedAfterHandoff
+			}
+			if toolStatus == ToolStatusConfirmationRequired {
+				proposalPending = true
+				skip = skippedAfterProposal
 			}
 			history = append(history, toolMessage)
 			result.Messages = cloneMessages(history)
@@ -346,6 +403,40 @@ func (r *Runner) Run(ctx context.Context, request TurnRequest) (TurnResult, erro
 		}
 	}
 	return result, ErrIterationLimit
+}
+
+// chargeForModelCall prices one model call against the conversation budget. The
+// cap stays hard: spend the provider never accounted for is always charged, and
+// the result never exceeds the reservation the budget already holds.
+func chargeForModelCall(response llm.Response, modelErr error, reservedTokens int) int {
+	reported := response.Usage.Total()
+	if modelErr != nil || reported <= 0 {
+		// Nothing usable came back. The attempts may still have consumed tokens,
+		// so write off the complete worst-case reservation.
+		return reservedTokens
+	}
+	if !response.UsageIncomplete {
+		return reported
+	}
+	// A later attempt succeeded and reported its usage. Each unaccounted attempt
+	// sent the same prompt and returned no completion, so it cost at most the
+	// reported input tokens — charging the whole reservation instead would bill
+	// several times the real spend and exhaust the conversation budget early.
+	unknown := response.UnknownUsageAttempts
+	if unknown < 1 {
+		unknown = 1
+	}
+	perAttempt := response.Usage.InputTokens
+	if perAttempt <= 0 {
+		// The provider reported only a total. Price each unaccounted attempt at
+		// that total rather than at zero.
+		perAttempt = reported
+	}
+	charged := reported + unknown*perAttempt
+	if charged > reservedTokens || charged < reported {
+		return reservedTokens
+	}
+	return charged
 }
 
 // executeCustomerResponse validates and traces the runner-local terminal
@@ -472,8 +563,11 @@ func (r *Runner) executeTool(
 	var executionErr error
 	executorInvoked := false
 	if _, allowed := r.allowedToolName[call.Name]; !allowed {
+		// An unregistered name is a recoverable planning error: no server action
+		// was attempted, so return the allowlist error to the model and let it
+		// choose a registered tool or ask the customer a clarification. Policy
+		// and ownership refusals returned by the gateway remain terminal handoffs.
 		execution = modelFacingToolError("TOOL_NOT_ALLOWED", "That tool is not available for this agent.")
-		execution.Status = ToolStatusRefused
 	} else if len(call.Arguments) > maxToolArgumentBytes || !isJSONObject(call.Arguments) {
 		execution = modelFacingToolError("INVALID_ARGUMENT", "Tool arguments must be a valid JSON object.")
 	} else if r.executor == nil {
@@ -591,11 +685,31 @@ func (r *Runner) executeTool(
 	return toolMessage, status, execution.SideEffectCommitted, nil
 }
 
+// skipReason explains to the model why a call in an already-decided response
+// was not executed.
+type skipReason struct {
+	code    string
+	message string
+}
+
+var (
+	skippedAfterHandoff = skipReason{
+		code:    "SKIPPED_AFTER_HANDOFF",
+		message: "The call was not executed because this response already triggered a human hand-off.",
+	}
+	skippedAfterProposal = skipReason{
+		code: "SKIPPED_AFTER_PROPOSAL",
+		message: "The call was not executed because this response already proposed an action the customer must confirm. " +
+			"Answer the customer with respond_to_customer and wait for their reply.",
+	}
+)
+
 func (r *Runner) recordSkippedTool(
 	ctx context.Context,
 	turn TurnRequest,
 	iteration, callIndex, callCount int,
 	call llm.ToolCall,
+	skip skipReason,
 ) (llm.Message, error) {
 	startedAt := r.now()
 	arguments := append(json.RawMessage(nil), call.Arguments...)
@@ -613,7 +727,7 @@ func (r *Runner) recordSkippedTool(
 	}); err != nil {
 		return llm.Message{}, fmt.Errorf("agent: persist skipped tool parent trace: %w", err)
 	}
-	execution := modelFacingToolError("SKIPPED_AFTER_HANDOFF", "The call was not executed because this response already triggered a human hand-off.")
+	execution := modelFacingToolError(skip.code, skip.message)
 	execution.Status = ToolStatusRefused
 	finishedAt := r.now()
 	if err := r.trace.RecordToolExecutionCompleted(ctx, ToolExecutionCompletedTrace{
@@ -698,6 +812,24 @@ func (r *Runner) toolVersion(name string) string {
 		return version
 	}
 	return "unregistered"
+}
+
+// normalizeToolCallNames accepts the one namespacing variant emitted by some
+// OpenAI-compatible providers. It only removes default_api. when the remaining
+// name is already in this runner's exact server-owned allowlist; all other
+// unknown names continue through the recoverable TOOL_NOT_ALLOWED path.
+func (r *Runner) normalizeToolCallNames(calls []llm.ToolCall) {
+	const providerNamespace = "default_api."
+	for i := range calls {
+		name := calls[i].Name
+		if !strings.HasPrefix(name, providerNamespace) {
+			continue
+		}
+		canonical := strings.TrimPrefix(name, providerNamespace)
+		if _, allowed := r.allowedToolName[canonical]; allowed {
+			calls[i].Name = canonical
+		}
+	}
 }
 
 func normalizeToolCallIDs(calls []llm.ToolCall, iteration int, seen map[string]struct{}) {

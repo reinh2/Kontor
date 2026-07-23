@@ -14,6 +14,11 @@
 | ADR-008 | — | accepted | Single Go binary per role; no frontend build step | `Dockerfile`, `web/` |
 | ADR-009 | — | accepted | Durable SSE via transactional event rows | `internal/channels/demohttp/` |
 | ADR-010 | — | accepted | Operator session tokens with digest-only storage | `internal/identity/` |
+| ADR-011 | — | accepted | Customer messages own contact capture and proposal supersession | `internal/conversations/`, `internal/app/`, `internal/tools/` |
+| ADR-012 | 2026-07-23 | accepted | Conservative token estimation uses bytes÷3, not 1:1 | `internal/agent/budget.go` |
+| ADR-013 | 2026-07-24 | accepted | respond_to_customer is the only channel to the customer | `internal/agent/runner.go` |
+| ADR-014 | 2026-07-24 | accepted | An accounted model call is charged at its reported usage | `internal/agent/runner.go`, `internal/llm/` |
+| ADR-015 | 2026-07-24 | accepted | A confirmed call executes the server's frozen action | `internal/tools/gateway.go` |
 
 ---
 
@@ -224,3 +229,204 @@ Same pattern as customer capabilities: login returns an opaque token once; only 
 - **Positive:** Leaked database cannot replay operator sessions.
 - **Negative:** Token rotation requires new login.
 - **Evidence:** `internal/identity/store.go`, migration `000006`.
+
+---
+
+## ADR-011: Customer messages own contact capture and proposal supersession
+
+- **Status:** accepted
+- **Supersedes:** none
+
+### Context
+
+The model may need contact data to progress a booking, but it is not an
+authority for customer identity. A visible pending proposal must also never be
+confirmable after the customer changes the request or a turn fails.
+
+### Decision
+
+Only a literal email or E.164 phone in the authenticated customer's persisted
+message can fill a missing profile contact. The tool gateway continues to
+derive booking customer data from that trusted profile. Any non-consent turn,
+clarification, or failed turn rejects live proposals; every durable turn event
+includes an explicit `pending_confirmation_active` snapshot for embedded UI.
+
+### Consequences
+
+- **Positive:** the model cannot fabricate contact data, and an old card cannot
+  silently authorize a superseded action.
+- **Negative:** a customer changing their mind must receive a new proposal and
+  confirm it again.
+- **Evidence:** `internal/conversations/store.go`, `internal/app/service.go`,
+  `internal/tools/confirmations.go`, `web/widget/kontor.js`.
+
+
+---
+
+## ADR-012: Conservative token estimation uses bytes÷3, not 1:1
+
+- **Status:** accepted
+- **Supersedes:** none (refines ADR-006's budget implementation)
+
+### Context
+
+The `ConservativeTokenEstimator` converted raw byte counts of message content
+and tool parameter schemas directly into token reservations (1 byte = 1 token).
+Real BPE tokenization averages 3.5–4 bytes per token for English text and JSON.
+The 1:1 ratio inflated typical tool-heavy requests (~10 schemas totaling ~5 KB)
+to ~5000-token reservations when actual provider usage was ~1500. With a 50 000
+conversation budget, a single turn could require 33 000+ tokens, exhausting the
+budget in one or two turns and triggering escalation before meaningful work.
+
+### Decision
+
+Replace the 1:1 byte-to-token ratio with ceiling division by a configurable
+`BytesPerToken` field (default 3). The conservative ratio of 3 safely
+overestimates real tokenization (~15% above average) while reducing reservations
+by ~3× compared to the former 1:1.
+
+The hard-budget safety invariant is preserved:
+- Provider failures and ambiguous usage still charge the full reservation.
+- Actual provider-reported usage above the reservation still triggers
+  `ErrUsageExceedsReservation` (full reservation is kept).
+- The persistent PostgreSQL cap (`tokens_used + tokens_reserved <= token_budget`)
+  is unchanged.
+
+### Consequences
+
+- **Positive:** A 50 000-token conversation now supports 5–8 normal turns before
+  budget pressure, matching real-model cost expectations.
+- **Negative:** If a provider tokenizer is far less efficient than 3 bytes/token
+  (unlikely for modern models with English/JSON), occasional
+  `ErrUsageExceedsReservation` events would retain the full reservation. This is
+  a safe failure mode (overcharges, never undercharges).
+- **Evidence:** `internal/agent/budget.go`, `internal/agent/budget_test.go`
+  (`TestConservativeTokenEstimatorRealisticToolSchemaNotInflated`).
+
+---
+
+## ADR-013: respond_to_customer is the only channel to the customer
+
+- **Status:** accepted
+- **Supersedes:** none (tightens ADR-002 and ADR-006)
+
+### Context
+
+The runner accepted an assistant message with no tool calls as a finished turn
+and delivered its text to the customer. With a real provider this became a
+hallucination channel: a model that skipped `list_services` answered a booking
+request with `I am sorry, "colour" is not a valid service` — for a service the
+tenant actually offers — followed by an invented UUID. No tool ran, so no
+server-side check could contradict it.
+
+The same gap let a turn keep calling tools after the gateway had already frozen
+a confirmation proposal, spending the iteration and token budget on work that
+only the customer's answer could unblock.
+
+### Decision
+
+Free assistant prose is never delivered. A response with no tool call is
+discarded, the runner appends a server-authored protocol correction and
+re-prompts within the same bounded turn, and after `maxProtocolCorrections`
+consecutive violations the turn fails closed into the existing escalation path.
+
+Once any tool returns `confirmation_required`, the remaining calls in that batch
+are skipped and every later iteration is answered with the same correction: only
+`respond_to_customer` may follow a live proposal.
+
+The correction is sent with the user role, not the system role: providers that
+flatten a conversation into a native format (Gemini through OpenRouter) return
+an empty response when a system message trails an assistant turn. The correction
+grants no authority, so a customer imitating it changes nothing.
+
+### Consequences
+
+- **Positive:** Every customer-facing sentence passes the validated terminal
+  control call, and the disposition/clarification policy sees every reply.
+- **Negative:** A model that cannot follow the protocol costs up to two extra
+  iterations per turn before escalating.
+- **Evidence:** `internal/agent/runner.go`, `internal/agent/runner_test.go`
+  (`TestRunnerDiscardsUnstructuredTextAndCorrectsProtocol`,
+  `TestRunnerFailsClosedOnRepeatedUnstructuredText`,
+  `TestRunnerStopsActingAfterAConfirmationProposal`).
+
+---
+
+## ADR-014: An accounted model call is charged at its reported usage
+
+- **Status:** accepted
+- **Supersedes:** none (refines ADR-006 and ADR-012)
+
+### Context
+
+`Response.UsageIncomplete` is sticky across the provider adapter's retry loop:
+one failed attempt sets it for the whole call. The runner charged the full
+worst-case reservation whenever it was set — even when a later attempt succeeded
+and reported its own usage. A booking conversation was billed ~82 000 tokens
+against a 100 000 budget for 39 329 real tokens and escalated as
+`budget_exhausted` before the customer could confirm.
+
+### Decision
+
+`chargeForModelCall` prices one call:
+
+- provider error, or no reported usage at all → the full reservation (unchanged);
+- reported usage with no incomplete attempts → the reported usage (unchanged);
+- reported usage with N unaccounted attempts → reported usage plus N × the
+  reported input tokens, capped at the reservation.
+
+Each unaccounted attempt sent the same prompt and returned no completion, so the
+input tokens bound its cost. `Response.UnknownUsageAttempts` carries N from the
+adapter; `Usage` keeps only provider-reported numbers.
+
+The hard cap is untouched: a charge never exceeds the reservation the budget
+already holds, and the PostgreSQL constraint
+(`tokens_used + tokens_reserved <= token_budget`) is unchanged.
+
+### Consequences
+
+- **Positive:** A conversation whose provider retried once is no longer billed
+  several times its real spend, so a booking can finish inside its budget.
+- **Negative:** If a failed attempt somehow cost more than the prompt it sent,
+  that excess is not charged. It remains bounded by the reservation.
+- **Evidence:** `internal/agent/runner.go` (`chargeForModelCall`),
+  `internal/agent/runner_test.go` (`TestChargeForModelCall`),
+  `internal/llm/openrouter.go`, `internal/llm/openrouter_test.go`
+  (`TestOpenRouterAdapterCountsAttemptsThatReportedNoUsage`).
+
+---
+
+## ADR-015: A confirmed call executes the server's frozen action
+
+- **Status:** accepted
+- **Supersedes:** none (changes how ADR-001 is enforced)
+
+### Context
+
+ADR-001 binds a mutation to the exact proposed facts. Enforcement compared the
+model's re-sent arguments against the frozen ones and refused the call on any
+difference. That made the model responsible for reproducing a ~600-character
+signed `slot_token` verbatim on the confirming turn. A small model corrupts it,
+the gateway reported `slot token is invalid or has been tampered with`, and a
+booking the customer had already approved died.
+
+### Decision
+
+When a call carries a `confirmation_id` that matches the conversation's own live
+proposal for that tool, the gateway replaces the call's arguments with the exact
+`ArgumentsJSON` frozen when the proposal was shown, then dispatches. An unknown
+or mismatched id changes nothing and the existing confirmation checks still
+decide whether the call may execute.
+
+### Consequences
+
+- **Positive:** Tampering after consent is impossible by construction rather
+  than detected after the fact, and the model never has to echo an opaque token
+  to complete a booking the customer approved.
+- **Negative:** A model that changes an argument after confirmation gets no
+  distinct error; its edit is silently discarded. The executed action is still
+  exactly the one the customer saw.
+- **Evidence:** `internal/tools/gateway.go` (`restoreFrozenAction`),
+  `internal/tools/gateway_test.go`
+  (`TestConfirmationRejectsChangedArgumentsAndCrossOwner`,
+  `TestConfirmationRejectsAnUnknownConfirmationID`).

@@ -30,6 +30,8 @@ type fakeBackend struct {
 	createErr   error
 	findQuery   FindSlotsQuery
 	findCalls   int
+	findErr     error
+	staffErr    error
 	onFind      func()
 	escalations []EscalationCommand
 }
@@ -39,6 +41,9 @@ func (b *fakeBackend) ListServices(context.Context, string) ([]Service, error) {
 }
 
 func (b *fakeBackend) ListStaff(context.Context, string, string) ([]Staff, error) {
+	if b.staffErr != nil {
+		return nil, b.staffErr
+	}
 	return b.staff, nil
 }
 
@@ -47,6 +52,9 @@ func (b *fakeBackend) FindSlots(_ context.Context, query FindSlotsQuery) ([]Avai
 	b.findQuery = query
 	if b.onFind != nil {
 		b.onFind()
+	}
+	if b.findErr != nil {
+		return nil, b.findErr
 	}
 	return b.slots, nil
 }
@@ -270,6 +278,25 @@ func TestGatewayEnforcesServerCapabilities(t *testing.T) {
 	}
 }
 
+func TestGatewayAsksForTrustedContactBeforeCreateBooking(t *testing.T) {
+	backend := &fakeBackend{}
+	gateway := newTestGateway(t, backend, NewMemoryConfirmationStore())
+	trusted := testTrusted("message-1")
+	token := testSlotToken(t, gateway, trusted)
+	trusted.CustomerEmail = ""
+	trusted.CustomerPhone = ""
+	result := gateway.Execute(context.Background(), trusted, Call{
+		Name:      ToolCreateBooking,
+		Arguments: json.RawMessage(fmt.Sprintf(`{"slot_token":%q,"idempotency_key":"contact-required-0001"}`, token)),
+	})
+	if result.Error == nil || result.Error.Code != CodeContactRequired || result.Error.Resolution != "ask_customer" {
+		t.Fatalf("result=%#v, want CONTACT_REQUIRED/ask_customer", result)
+	}
+	if backend.createCalls != 0 {
+		t.Fatalf("create booking ran without trusted contact: %d", backend.createCalls)
+	}
+}
+
 func TestSlotTokenTamperingAndScope(t *testing.T) {
 	gateway := newTestGateway(t, &fakeBackend{}, NewMemoryConfirmationStore())
 	trusted := testTrusted("message-1")
@@ -330,6 +357,209 @@ func TestFindSlotsIssuesScopedToken(t *testing.T) {
 	claims, err := gateway.signer.Verify(data.Slots[0].SlotToken, testTrusted("message-1"), testNow)
 	if err != nil || claims.ServiceID != testService || claims.StaffID != testStaff {
 		t.Fatalf("claims = %#v, err = %v", claims, err)
+	}
+}
+
+func TestOmittedIdempotencyKeyIsDerivedAndStable(t *testing.T) {
+	// Three different real models each invented an idempotency_key the contract
+	// pattern rejected (an email address, a timestamp with a "+" offset), losing
+	// the booking after the customer had already picked a slot.
+	backend := &fakeBackend{slots: []AvailableSlot{{
+		ServiceID: testService, ServiceName: "Consultation", StaffID: testStaff,
+		StaffName: "Ada", StartAt: testNow.Add(24 * time.Hour),
+		EndAt: testNow.Add(25 * time.Hour), Timezone: "Europe/Berlin",
+	}}}
+	store := NewMemoryConfirmationStore()
+	gateway := newTestGateway(t, backend, store)
+
+	propose := func(messageID string) Result {
+		slots := gateway.Execute(context.Background(), testTrusted(messageID), Call{
+			ID: "find", Name: ToolFindSlots, Arguments: rawArguments(t, map[string]any{
+				"service_id": testService,
+				"date_from":  testNow.Add(23 * time.Hour).Format(time.RFC3339),
+				"date_to":    testNow.Add(26 * time.Hour).Format(time.RFC3339),
+			}),
+		})
+		data, ok := slots.Data.(FindSlotsData)
+		if !ok || len(data.Slots) != 1 {
+			t.Fatalf("find data = %#v", slots.Data)
+		}
+		return gateway.Execute(context.Background(), testTrusted(messageID), Call{
+			ID: "propose", Name: ToolCreateBooking, Arguments: rawArguments(t, map[string]any{
+				"slot_token": data.Slots[0].SlotToken,
+			}),
+		})
+	}
+
+	first := propose("message-1")
+	if first.Status != StatusConfirmationRequired || first.Confirmation == nil {
+		t.Fatalf("omitting idempotency_key blocked the proposal: %#v", first)
+	}
+	// A second proposal for the same appointment must derive the same key, so it
+	// reuses the live proposal instead of creating a competing one. Slot tokens
+	// differ between find_slots calls, so only a fact-derived key can do this.
+	second := propose("message-1")
+	if second.Confirmation == nil || second.Confirmation.ID != first.Confirmation.ID {
+		t.Fatalf("derived key was not stable: first=%#v second=%#v", first.Confirmation, second.Confirmation)
+	}
+
+	confirmed := testTrusted("message-2")
+	if err := store.Authorize(context.Background(), first.Confirmation.ID, confirmed, testNow); err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	commit := gateway.Execute(context.Background(), confirmed, Call{
+		ID: "commit", Name: ToolCreateBooking, Arguments: rawArguments(t, map[string]any{
+			"slot_token":      "slt_v1_" + strings.Repeat("q", 40) + "." + strings.Repeat("r", 8),
+			"confirmation_id": first.Confirmation.ID,
+		}),
+	})
+	if commit.Status != StatusSuccess || backend.createCalls != 1 {
+		t.Fatalf("commit = %#v calls=%d", commit, backend.createCalls)
+	}
+	if backend.lastCreate.IdempotencyKey == "" {
+		t.Fatal("backend received no idempotency key")
+	}
+}
+
+func TestPartialCustomerObjectDoesNotBlockBooking(t *testing.T) {
+	// The gateway overwrites any model-supplied customer with the authenticated
+	// profile, so validating that object only produced false rejections: a real
+	// model looped on "/customer violates required" until the turn died.
+	backend := &fakeBackend{slots: []AvailableSlot{{
+		ServiceID: testService, ServiceName: "Consultation", StaffID: testStaff,
+		StaffName: "Ada", StartAt: testNow.Add(24 * time.Hour),
+		EndAt: testNow.Add(25 * time.Hour), Timezone: "Europe/Berlin",
+	}}}
+	gateway := newTestGateway(t, backend, NewMemoryConfirmationStore())
+	slots := gateway.Execute(context.Background(), testTrusted("message-1"), Call{
+		ID: "find", Name: ToolFindSlots, Arguments: rawArguments(t, map[string]any{
+			"service_id": testService,
+			"date_from":  testNow.Add(23 * time.Hour).Format(time.RFC3339),
+			"date_to":    testNow.Add(26 * time.Hour).Format(time.RFC3339),
+		}),
+	})
+	data, ok := slots.Data.(FindSlotsData)
+	if !ok || len(data.Slots) != 1 {
+		t.Fatalf("find data = %#v", slots.Data)
+	}
+	result := gateway.Execute(context.Background(), testTrusted("message-2"), Call{
+		ID: "propose", Name: ToolCreateBooking, Arguments: rawArguments(t, map[string]any{
+			"slot_token":      data.Slots[0].SlotToken,
+			"idempotency_key": "booking-key-0123456789",
+			"customer":        map[string]any{"display_name": "Typed By The Model"},
+		}),
+	})
+	if result.Status != StatusConfirmationRequired {
+		t.Fatalf("result = %#v", result)
+	}
+	// The authenticated profile still owns the frozen facts.
+	for _, fact := range result.Confirmation.Facts {
+		if fact.Label == "Customer" && fact.Value != "Persisted Customer" {
+			t.Fatalf("model-supplied customer entered the proposal: %q", fact.Value)
+		}
+	}
+}
+
+func TestDiscoveryLookupMissEndsAsFixableArgumentNotRefusal(t *testing.T) {
+	// A real model passed a service UUID as staff_id. The catalogue miss used to
+	// map to NOT_FOUND_OR_NOT_OWNED, which the executor treats as a refusal and
+	// the runner turns into a terminal human hand-off.
+	backend := &fakeBackend{findErr: ErrNotFoundOrNotOwned, staffErr: ErrNotFoundOrNotOwned}
+	gateway := newTestGateway(t, backend, NewMemoryConfirmationStore())
+	calls := []Call{
+		{ID: "staff-miss", Name: ToolListStaff, Arguments: rawArguments(t, map[string]any{"service_id": testService})},
+		{ID: "slots-miss", Name: ToolFindSlots, Arguments: rawArguments(t, map[string]any{
+			"service_id": testService,
+			"staff_id":   testStaff,
+			"date_from":  testNow.Add(23 * time.Hour).Format(time.RFC3339),
+			"date_to":    testNow.Add(26 * time.Hour).Format(time.RFC3339),
+		})},
+	}
+	for _, call := range calls {
+		result := gateway.Execute(context.Background(), testTrusted("message-1"), call)
+		if result.Error == nil || result.Error.Code != CodeInvalidArgument || result.Error.Resolution != "fix_arguments" {
+			t.Fatalf("%s result = %#v", call.Name, result)
+		}
+	}
+	// An owned-resource miss on any mutating tool must still refuse terminally.
+	refusal := gateway.backendFailure(Result{}, ErrNotFoundOrNotOwned)
+	if refusal.Error == nil || refusal.Error.Code != CodeNotFoundOrNotOwned || refusal.Error.Resolution != "escalate" {
+		t.Fatalf("mutating-tool ownership miss = %#v", refusal.Error)
+	}
+}
+
+func TestInvalidArgumentErrorNamesTheFailingArgument(t *testing.T) {
+	gateway := newTestGateway(t, &fakeBackend{}, NewMemoryConfirmationStore())
+	// A real model produced a timestamp-derived idempotency_key whose "+" offset
+	// breaks the contract pattern. Without the failing path the model cannot act
+	// on the fix_arguments resolution and gives up on the booking.
+	arguments := map[string]any{
+		"slot_token":      "slt_v1_" + strings.Repeat("a", 32) + "." + strings.Repeat("b", 8),
+		"idempotency_key": "2026-07-25T09:00:00+02:00-Colour",
+	}
+	result := gateway.Execute(context.Background(), testTrusted("message-1"), Call{
+		ID: "invalid-key", Name: ToolCreateBooking, Arguments: rawArguments(t, arguments),
+	})
+	if result.Error == nil || result.Error.Code != CodeInvalidArgument || result.Error.Resolution != "fix_arguments" {
+		t.Fatalf("result = %#v", result)
+	}
+	if !strings.Contains(result.Error.Message, "/idempotency_key") ||
+		!strings.Contains(result.Error.Message, "pattern") {
+		t.Fatalf("error message does not name the failing argument: %q", result.Error.Message)
+	}
+	// The rejected value itself must never travel back to the model.
+	if strings.Contains(result.Error.Message, "2026-07-25T09:00:00") {
+		t.Fatalf("error message echoed the argument value: %q", result.Error.Message)
+	}
+
+	// A model also placed contact at the top level instead of under customer.
+	// "violates additionalProperties" alone is not actionable; the key is.
+	extra := gateway.Execute(context.Background(), testTrusted("message-2"), Call{
+		ID: "extra-property", Name: ToolCreateBooking, Arguments: rawArguments(t, map[string]any{
+			"slot_token":      "slt_v1_" + strings.Repeat("a", 32) + "." + strings.Repeat("b", 8),
+			"idempotency_key": "1a479c01-3bfc-4800-84b2-62c08a2807e5",
+			"contact":         map[string]any{"email": "anna@example.com"},
+		}),
+	})
+	if extra.Error == nil || !strings.Contains(extra.Error.Message, "contact") {
+		t.Fatalf("error message does not name the rejected property: %#v", extra.Error)
+	}
+	if strings.Contains(extra.Error.Message, "anna@example.com") {
+		t.Fatalf("error message echoed customer data: %q", extra.Error.Message)
+	}
+}
+
+func TestFindSlotsCapsModelFacingSlots(t *testing.T) {
+	available := make([]AvailableSlot, 0, maxModelFacingSlots+8)
+	for i := 0; i < cap(available); i++ {
+		start := testNow.Add(time.Duration(24+i) * time.Hour)
+		available = append(available, AvailableSlot{
+			ServiceID: testService, ServiceName: "Consultation", StaffID: testStaff,
+			StaffName: "Ada", StartAt: start, EndAt: start.Add(30 * time.Minute),
+			Timezone: "Europe/Berlin",
+		})
+	}
+	backend := &fakeBackend{slots: available}
+	gateway := newTestGateway(t, backend, NewMemoryConfirmationStore())
+	arguments := map[string]any{
+		"service_id": testService,
+		"date_from":  testNow.Add(23 * time.Hour).Format(time.RFC3339),
+		"date_to":    testNow.Add(time.Duration(24+len(available)) * time.Hour).Format(time.RFC3339),
+	}
+	result := gateway.Execute(context.Background(), testTrusted("message-1"), Call{
+		ID: "find-capped", Name: ToolFindSlots, Arguments: rawArguments(t, arguments),
+	})
+	if result.Status != StatusSuccess {
+		t.Fatalf("find result = %#v", result)
+	}
+	data, ok := result.Data.(FindSlotsData)
+	if !ok || len(data.Slots) != maxModelFacingSlots || !data.Truncated {
+		t.Fatalf("find data = %#v", result.Data)
+	}
+	// The cap must keep the earliest options so the model can still answer the
+	// customer's requested time instead of a late-day remainder.
+	if !data.Slots[0].StartAt.Equal(available[0].StartAt) {
+		t.Fatalf("first slot = %s, want %s", data.Slots[0].StartAt, available[0].StartAt)
 	}
 }
 
@@ -611,10 +841,41 @@ func TestConfirmationRejectsChangedArgumentsAndCrossOwner(t *testing.T) {
 	if err := store.Authorize(context.Background(), proposal.Confirmation.ID, confirmed, testNow); err != nil {
 		t.Fatalf("authorize: %v", err)
 	}
+	// A confirming call is executed from the action the server froze, so an
+	// argument the model changed afterwards cannot reach the backend. The model
+	// also no longer has to reproduce the ~600-character slot token verbatim,
+	// which is what used to kill a booking the customer had already approved.
 	arguments["notes"] = "changed after customer confirmation"
+	arguments["slot_token"] = "slt_v1_" + strings.Repeat("z", 40) + "." + strings.Repeat("y", 8)
 	arguments["confirmation_id"] = proposal.Confirmation.ID
 	result := gateway.Execute(context.Background(), confirmed, Call{Name: ToolCreateBooking, Arguments: rawArguments(t, arguments)})
-	if result.Error == nil || result.Error.Code != CodeConfirmationStale || backend.createCalls != 0 {
+	if result.Status != StatusSuccess || backend.createCalls != 1 {
+		t.Fatalf("result = %#v, calls = %d", result, backend.createCalls)
+	}
+	if backend.lastCreate.Notes == "changed after customer confirmation" {
+		t.Fatal("an argument changed after confirmation reached the backend")
+	}
+}
+
+func TestConfirmationRejectsAnUnknownConfirmationID(t *testing.T) {
+	backend := &fakeBackend{}
+	store := NewMemoryConfirmationStore()
+	gateway := newTestGateway(t, backend, store)
+	trusted := testTrusted("message-1")
+	arguments := validCreateArguments(testSlotToken(t, gateway, trusted))
+	proposal := gateway.Execute(context.Background(), trusted, Call{Name: ToolCreateBooking, Arguments: rawArguments(t, arguments)})
+	if proposal.Confirmation == nil {
+		t.Fatalf("proposal = %#v", proposal)
+	}
+	confirmed := testTrusted("message-2")
+	if err := store.Authorize(context.Background(), proposal.Confirmation.ID, confirmed, testNow); err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	// Restoring the frozen action must never be reachable through an id the
+	// conversation's own live proposal does not carry.
+	arguments["confirmation_id"] = "77777777-7777-4777-8777-777777777777"
+	result := gateway.Execute(context.Background(), confirmed, Call{Name: ToolCreateBooking, Arguments: rawArguments(t, arguments)})
+	if result.Status == StatusSuccess || backend.createCalls != 0 {
 		t.Fatalf("result = %#v, calls = %d", result, backend.createCalls)
 	}
 }

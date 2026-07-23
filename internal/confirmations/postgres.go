@@ -153,6 +153,23 @@ func (s *PostgreSQL) Latest(
 	return state, true, nil
 }
 
+func (s *PostgreSQL) InvalidateLatest(
+	ctx context.Context,
+	tenantID, ownerCustomerID, conversationID string,
+	now time.Time,
+) error {
+	// This is deliberately an ownership-scoped update rather than a delete:
+	// the audit trail records why a prior proposal can no longer be confirmed.
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE action_proposals SET status='rejected'
+		WHERE tenant_id=$1 AND customer_id=$2 AND conversation_id=$3
+		  AND status IN ('pending','confirmed') AND expires_at>$4`,
+		tenantID, ownerCustomerID, conversationID, now); err != nil {
+		return fmt.Errorf("invalidate confirmation proposals: %w", err)
+	}
+	return nil
+}
+
 func (s *PostgreSQL) Authorize(ctx context.Context, id string, confirmedBy tools.TrustedContext, now time.Time) error {
 	if confirmedBy.InboundMessageID == "" {
 		return tools.ErrConfirmationInvalid
