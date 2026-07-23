@@ -19,6 +19,7 @@ import (
 
 const (
 	defaultOpenRouterEndpoint = "https://openrouter.ai/api/v1/chat/completions"
+	defaultOpenAIEndpoint     = "https://api.openai.com/v1/chat/completions"
 	defaultOpenRouterTimeout  = 20 * time.Second
 	defaultOpenRouterAttempts = 3
 	defaultRetryBaseDelay     = 200 * time.Millisecond
@@ -42,6 +43,22 @@ type OpenRouterConfig struct {
 	Endpoint       string
 	HTTPReferer    string
 	AppTitle       string
+	Timeout        time.Duration
+	HTTPClient     *http.Client
+	MaxAttempts    int
+	RetryBaseDelay time.Duration
+	RetryMaxDelay  time.Duration
+	RetryJitter    RetryJitterFunc
+	RetryWait      RetryWaitFunc
+	Now            func() time.Time
+}
+
+// OpenAIConfig configures a direct OpenAI Chat Completions connection. It
+// intentionally does not expose OpenRouter attribution headers.
+type OpenAIConfig struct {
+	APIKey         string
+	Model          string
+	Endpoint       string
 	Timeout        time.Duration
 	HTTPClient     *http.Client
 	MaxAttempts    int
@@ -140,6 +157,29 @@ func NewOpenRouterAdapter(config OpenRouterConfig) (*OpenRouterAdapter, error) {
 		retryWait:      retryWait,
 		now:            now,
 	}, nil
+}
+
+// NewOpenAIAdapter constructs a direct OpenAI adapter. OpenAI and OpenRouter
+// use the same Chat Completions wire contract used by this adapter, while only
+// OpenRouter receives its attribution headers.
+func NewOpenAIAdapter(config OpenAIConfig) (*OpenRouterAdapter, error) {
+	endpoint := strings.TrimSpace(config.Endpoint)
+	if endpoint == "" {
+		endpoint = defaultOpenAIEndpoint
+	}
+	return NewOpenRouterAdapter(OpenRouterConfig{
+		APIKey:         config.APIKey,
+		Model:          config.Model,
+		Endpoint:       endpoint,
+		Timeout:        config.Timeout,
+		HTTPClient:     config.HTTPClient,
+		MaxAttempts:    config.MaxAttempts,
+		RetryBaseDelay: config.RetryBaseDelay,
+		RetryMaxDelay:  config.RetryMaxDelay,
+		RetryJitter:    config.RetryJitter,
+		RetryWait:      config.RetryWait,
+		Now:            config.Now,
+	})
 }
 
 type openRouterRequest struct {

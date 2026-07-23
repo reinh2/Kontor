@@ -112,6 +112,9 @@ type Agent struct {
 
 type LLM struct {
 	Provider        string
+	OpenAIKey       string
+	OpenAIURL       string
+	OpenAIModel     string
 	OpenRouterKey   string
 	OpenRouterURL   string
 	OpenRouterModel string
@@ -161,6 +164,9 @@ func Load() (Config, error) {
 		},
 		LLM: LLM{
 			Provider:        strings.ToLower(env("LLM_PROVIDER", "fake")),
+			OpenAIKey:       os.Getenv("OPENAI_API_KEY"),
+			OpenAIURL:       env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+			OpenAIModel:     os.Getenv("OPENAI_MODEL"),
 			OpenRouterKey:   os.Getenv("OPENROUTER_API_KEY"),
 			OpenRouterURL:   env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
 			OpenRouterModel: os.Getenv("OPENROUTER_MODEL"),
@@ -277,8 +283,16 @@ func Load() (Config, error) {
 	if cfg.HTTP.AllowedOrigin == "" {
 		return Config{}, errors.New("HTTP_ALLOWED_ORIGIN must not be empty")
 	}
-	if cfg.LLM.Provider != "fake" && cfg.LLM.Provider != "openrouter" {
+	if cfg.LLM.Provider != "fake" && cfg.LLM.Provider != "openai" && cfg.LLM.Provider != "openrouter" {
 		return Config{}, fmt.Errorf("unsupported LLM_PROVIDER %q", cfg.LLM.Provider)
+	}
+	if cfg.LLM.Provider == "openai" {
+		if cfg.LLM.OpenAIKey == "" {
+			return Config{}, errors.New("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
+		}
+		if cfg.LLM.OpenAIModel == "" {
+			return Config{}, errors.New("OPENAI_MODEL is required when LLM_PROVIDER=openai")
+		}
 	}
 	if cfg.LLM.Provider == "openrouter" {
 		if cfg.LLM.OpenRouterKey == "" {

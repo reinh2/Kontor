@@ -22,7 +22,7 @@ import (
 	"github.com/reinhlord/kontor/internal/tools"
 )
 
-const stage1OpenRouterAttempts = 3
+const stage1ProviderAttempts = 3
 
 type Components struct {
 	Application   *app.Service
@@ -86,25 +86,42 @@ func Build(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, logger *s
 }
 
 func modelAdapter(cfg config.Config) (llm.Adapter, string, error) {
-	if cfg.LLM.Provider == "fake" {
+	switch cfg.LLM.Provider {
+	case "fake":
 		adapter, err := llm.NewDemoAdapter(llm.DemoConfig{Timezone: cfg.Tenant.Timezone})
 		return adapter, "kontor/demo-v1", err
+	case "openai":
+		endpoint := chatCompletionsEndpoint(cfg.LLM.OpenAIURL)
+		adapter, err := llm.NewOpenAIAdapter(llm.OpenAIConfig{
+			APIKey: cfg.LLM.OpenAIKey, Model: cfg.LLM.OpenAIModel, Endpoint: endpoint,
+			Timeout: cfg.Agent.TurnTimeout, MaxAttempts: stage1ProviderAttempts,
+		})
+		return adapter, cfg.LLM.OpenAIModel, err
+	case "openrouter":
+		endpoint := chatCompletionsEndpoint(cfg.LLM.OpenRouterURL)
+		adapter, err := llm.NewOpenRouterAdapter(llm.OpenRouterConfig{
+			APIKey: cfg.LLM.OpenRouterKey, Model: cfg.LLM.OpenRouterModel, Endpoint: endpoint,
+			HTTPReferer: cfg.LLM.AppURL, AppTitle: cfg.LLM.AppTitle,
+			Timeout: cfg.Agent.TurnTimeout, MaxAttempts: stage1ProviderAttempts,
+		})
+		return adapter, cfg.LLM.OpenRouterModel, err
+	default:
+		return nil, "", fmt.Errorf("unsupported LLM provider %q", cfg.LLM.Provider)
 	}
-	endpoint := strings.TrimRight(cfg.LLM.OpenRouterURL, "/")
+
+}
+
+func chatCompletionsEndpoint(baseURL string) string {
+	endpoint := strings.TrimRight(baseURL, "/")
 	if !strings.HasSuffix(endpoint, "/chat/completions") {
 		endpoint += "/chat/completions"
 	}
-	adapter, err := llm.NewOpenRouterAdapter(llm.OpenRouterConfig{
-		APIKey: cfg.LLM.OpenRouterKey, Model: cfg.LLM.OpenRouterModel, Endpoint: endpoint,
-		HTTPReferer: cfg.LLM.AppURL, AppTitle: cfg.LLM.AppTitle,
-		Timeout: cfg.Agent.TurnTimeout, MaxAttempts: stage1OpenRouterAttempts,
-	})
-	return adapter, cfg.LLM.OpenRouterModel, err
+	return endpoint
 }
 
 func providerAttemptLimit(provider string) int {
-	if provider == "openrouter" {
-		return stage1OpenRouterAttempts
+	if provider == "openai" || provider == "openrouter" {
+		return stage1ProviderAttempts
 	}
 	return 1
 }

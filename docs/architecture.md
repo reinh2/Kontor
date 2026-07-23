@@ -2,7 +2,7 @@
 
 ## System overview
 
-Kontor is a Go monorepo producing two binaries (`cmd/api` and `cmd/worker`) backed by a single PostgreSQL 15 database. The API binary serves customer-facing channels (widget, Telegram, demo HTTP), an operator console SPA, and tenant onboarding endpoints. A bounded agent runner processes each customer turn using either a deterministic fake LLM or OpenRouter, proposing actions through a schema-validated tool gateway that enforces two-phase confirmation before any calendar mutation. The worker binary polls a durable job queue for post-booking side effects (reminders, CRM). Nginx sits in front as a reverse proxy for rate limiting passthrough and SSE buffering control.
+Kontor is a Go monorepo producing two binaries (`cmd/api` and `cmd/worker`) backed by a single PostgreSQL 15 database. The API binary serves customer-facing channels (widget, Telegram, demo HTTP), an operator console SPA, and tenant onboarding endpoints. A bounded agent runner processes each customer turn using a deterministic fake LLM, OpenAI, or OpenRouter, proposing actions through a schema-validated tool gateway that enforces two-phase confirmation before any calendar mutation. The worker binary polls a durable job queue for post-booking side effects (reminders, CRM). Nginx sits in front as a reverse proxy for rate limiting passthrough and SSE buffering control.
 
 ```mermaid
 flowchart LR
@@ -11,7 +11,7 @@ flowchart LR
     Operator["Operator console"] --> Nginx
     Nginx --> API["cmd/api binary"]
     API --> Runner["Bounded agent runner"]
-    Runner <--> LLM["Fake / OpenRouter"]
+    Runner <--> LLM["Fake / OpenAI / OpenRouter"]
     Runner --> Executor["Retrying tool executor"]
     Executor --> Gateway["Schema + capability + confirmation gateway"]
     Gateway --> Scheduling["Scheduling engine"]
@@ -61,7 +61,7 @@ internal/
   demo/             Fixed-tenant seeding and demo catalog
   identity/         Operator authentication, sessions, password hashing, middleware
   jobqueue/         Durable job queue (claim, retry, dead-letter)
-  llm/              LLM provider abstraction (fake + OpenRouter)
+  llm/              LLM provider abstraction (fake + OpenAI + OpenRouter)
   notifications/    Notifier interface + LogNotifier driver
   platform/
     config/         Environment-based configuration loading
@@ -158,7 +158,7 @@ deploy/nginx/       Nginx configuration
 | Onboarding API | inbound | Operator session | HTTP error responses | `internal/channels/onboardinghttp/` |
 | Telegram webhook | inbound | Constant-time secret check | Per-update_id idempotency | `internal/channels/telegram/` |
 | Widget SSE | outbound (streaming) | Capability token | Durable replay from Last-Event-ID | `internal/channels/demohttp/` |
-| OpenRouter Chat Completions | outbound | API key (env) | Bounded retries, dead-letter on provider failure | `internal/llm/` |
+| OpenAI / OpenRouter Chat Completions | outbound | Provider API key (env) | Bounded retries, dead-letter on provider failure | `internal/llm/` |
 | HubSpot CRM API | outbound | API key (env, behind feature flag) | Job retry with exponential backoff | `internal/crm/` |
 
 ## Cross-cutting concerns

@@ -1,5 +1,15 @@
+# Local configuration and secrets.
 .env
+.env.*
+!.env.example
+
+# Editor, cache, and log artifacts.
 .DS_Store
+.idea/
+.vscode/
+.cache/
+tmp/
+*.log
 .kiro/
 ROADMAP.md
 ROADMAP_RU.md

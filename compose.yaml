@@ -49,6 +49,9 @@ services:
       DEMO_OWNER_EMAIL: ${DEMO_OWNER_EMAIL:-owner@salon-nord.test}
       DEMO_OWNER_PASSWORD: ${DEMO_OWNER_PASSWORD:-demo-operator-password}
       LLM_PROVIDER: ${LLM_PROVIDER:-fake}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
@@ -96,6 +99,9 @@ services:
       TENANT_CHANNEL_ENCRYPTION_KEY: ${TENANT_CHANNEL_ENCRYPTION_KEY:-demo-only-tenant-channel-key-32!}
       OPERATOR_SESSION_TTL: ${OPERATOR_SESSION_TTL:-12h}
       LLM_PROVIDER: ${LLM_PROVIDER:-fake}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}

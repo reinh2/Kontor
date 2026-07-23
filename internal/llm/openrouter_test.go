@@ -115,6 +115,44 @@ func TestOpenRouterAdapterChatCompletionsToolContract(t *testing.T) {
 	}
 }
 
+func TestOpenAIAdapterUsesDirectChatCompletionsWithoutOpenRouterHeaders(t *testing.T) {
+	t.Parallel()
+
+	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/chat/completions" {
+			t.Errorf("path = %s", request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer direct-openai-key" {
+			t.Errorf("Authorization = %q", got)
+		}
+		if got := request.Header.Get("HTTP-Referer"); got != "" {
+			t.Errorf("HTTP-Referer = %q, want empty", got)
+		}
+		if got := request.Header.Get("X-OpenRouter-Title"); got != "" {
+			t.Errorf("X-OpenRouter-Title = %q, want empty", got)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(openRouterSuccessBody(3)))
+	})
+
+	adapter, err := NewOpenAIAdapter(OpenAIConfig{
+		APIKey: "direct-openai-key", Model: "test-model",
+		Endpoint: "https://openai.test/v1/chat/completions", HTTPClient: recorderClient(handler),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := adapter.Complete(context.Background(), Request{
+		Messages: []Message{{Role: RoleUser, Content: "hello"}}, MaxOutputTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Usage.Total() != 3 {
+		t.Fatalf("usage = %#v", response.Usage)
+	}
+}
+
 func TestOpenRouterAdapterReturnsTypedHTTPError(t *testing.T) {
 	t.Parallel()
 	handler := http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {

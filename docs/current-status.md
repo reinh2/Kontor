@@ -12,6 +12,7 @@
 
 ## Recently completed
 
+- **Direct OpenAI provider.** Added `LLM_PROVIDER=openai` with `OPENAI_API_KEY`, `OPENAI_MODEL`, and optional `OPENAI_BASE_URL`. It uses the existing bounded Chat Completions tool-calling path without OpenRouter attribution headers; fake and OpenRouter modes remain supported. Unit coverage verifies direct authentication and headers, and Compose now passes the settings to both API and worker.
 - **Code-review audit fixes (2026-07-23).** Resolved the defects recorded in [`ROADMAP.md`](../ROADMAP.md) "Code review — full audit":
   - **D-1 (correctness):** the customer `reschedule_booking` / `cancel_booking` repository paths now run through the same serializable-retry loop and `mapDatabaseError` wrapper as `CreateBooking` and the Admin paths, so an overlapping-slot reschedule surfaces as `ErrSlotUnavailable` (not a misleadingly retryable dependency error) and transient serialization conflicts are retried.
   - **D-2 (reliability):** the job queue now recovers stranded work. `jobqueue.Queue.RequeueStaleClaims` returns jobs stuck in `claimed` by a crashed/shut-down worker to `pending` (dead-lettering exhausted ones), the worker runs it on a timer, and terminal `Complete`/`Fail` writes use a shutdown-safe context so a finished job is never stranded.

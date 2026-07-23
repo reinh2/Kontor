@@ -15,6 +15,31 @@ func TestLoadRejectsOpenRouterWithoutCredentials(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsOpenAIWithoutCredentials(t *testing.T) {
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_MODEL", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected missing OpenAI credentials to fail")
+	}
+}
+
+func TestLoadAcceptsOpenAICredentials(t *testing.T) {
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("OPENAI_MODEL", "test-model")
+	t.Setenv("OPENAI_BASE_URL", "https://openai.test/v1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LLM.OpenAIKey != "test-openai-key" || cfg.LLM.OpenAIModel != "test-model" || cfg.LLM.OpenAIURL != "https://openai.test/v1" {
+		t.Fatalf("OpenAI config = %+v", cfg.LLM)
+	}
+}
+
 func TestLoadAllowsCustomDemoTenantID(t *testing.T) {
 	const tenantID = "00000000-0000-4000-8000-000000000002"
 	t.Setenv("FIXED_TENANT_ID", tenantID)

@@ -117,7 +117,7 @@ The bootstrap is rejected when `DEMO_MODE=true`, when it is not enabled but fiel
 
 ### Optional integrations
 
-- **OpenRouter:** copy [`.env.example`](.env.example), set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and `OPENROUTER_MODEL`, then restart Compose. The same confirmation, authorization, budget, and scheduling rules remain in force.
+- **OpenAI:** copy [`.env.example`](.env.example), set `LLM_PROVIDER=openai`, `OPENAI_API_KEY`, and `OPENAI_MODEL`, then restart Compose. The direct Chat Completions adapter supports the same tool calling, confirmation, authorization, budget, and scheduling rules. OpenRouter remains available with `LLM_PROVIDER=openrouter`.
 - **Operator console:** open [http://localhost:8080/operator](http://localhost:8080/operator), then use the tenant-local owner or staff session created through provisioning and login. The Stage 5 shared administrator token is not used by Stage 6.
 - **Telegram:** configure a tenant's channel through the owner-only channel API, then register its tenant-specific webhook path. There is no process-wide Telegram bot or webhook-secret configuration for tenant traffic.
 
