@@ -350,7 +350,13 @@ func (s *Service) SendMessage(ctx context.Context, conversationID, text, clientM
 			fmt.Errorf("load final confirmation state: %w", err),
 		)
 	}
-	if found && pending.Status == "pending" {
+	// "authorized" is what confirmations.Latest reports for a proposal the
+	// customer already consented to (stored as "confirmed") whose action the
+	// model then failed to execute. It must stay on the card: the consent is
+	// still valid, and dropping it strands the customer's "yes" with no way to
+	// retry. Only "pending" and "authorized" are live; rejected, expired, and
+	// consumed proposals must never be shown again.
+	if found && (pending.Status == "pending" || pending.Status == "authorized") {
 		proposal := pending.Proposal
 		pendingConfirmation = &proposal
 	}
