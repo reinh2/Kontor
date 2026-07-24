@@ -3,19 +3,147 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kontor widget demo</title>
+  <title>Salon Nord</title>
   <style>
-    body { font: 16px/1.6 system-ui, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 20px; color: #1a1a2e; }
-    code { background: #f0f1f7; padding: 2px 6px; border-radius: 6px; }
+    :root {
+      --ink: #1a1a2e;
+      --muted: #6b7280;
+      --line: #e8e8f0;
+      --paper: #fffdf9;
+      --accent: #6d5efc;
+      --accent-ink: #fff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+    }
+    a { color: inherit; }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 28px 24px 0;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 20px; letter-spacing: -0.01em; }
+    .brand-mark {
+      width: 32px; height: 32px; border-radius: 9px;
+      background: linear-gradient(135deg, var(--accent), #a78bfa);
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 16px;
+    }
+    nav { display: flex; gap: 28px; font-size: 14px; color: var(--muted); }
+    nav a { text-decoration: none; }
+    nav a:hover { color: var(--ink); }
+    .demo-note {
+      max-width: 960px; margin: 22px auto 0; padding: 0 24px;
+    }
+    .demo-note span {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 13px; color: var(--muted);
+      background: #f4f3ff; border: 1px solid #e6e1ff; border-radius: 999px;
+      padding: 6px 14px;
+    }
+    .demo-note b { color: var(--accent); font-weight: 600; }
+    .hero {
+      max-width: 960px; margin: 0 auto; padding: 56px 24px 40px;
+    }
+    .hero h1 { font-size: 44px; line-height: 1.1; margin: 0 0 16px; letter-spacing: -0.02em; }
+    .hero p { max-width: 46ch; color: var(--muted); font-size: 17px; margin: 0 0 28px; }
+    .hero-meta { display: flex; gap: 28px; flex-wrap: wrap; font-size: 14px; color: var(--muted); }
+    .hero-meta strong { color: var(--ink); display: block; font-size: 13px; margin-bottom: 2px; }
+    section { max-width: 960px; margin: 0 auto; padding: 40px 24px; border-top: 1px solid var(--line); }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 20px; }
+    .services { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+    .service {
+      border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .service .name { font-weight: 600; }
+    .service .meta { color: var(--muted); font-size: 13px; }
+    .service .price { margin-top: 10px; font-size: 15px; font-weight: 600; }
+    .team { display: flex; gap: 24px; flex-wrap: wrap; }
+    .person { display: flex; align-items: center; gap: 12px; }
+    .avatar {
+      width: 44px; height: 44px; border-radius: 50%;
+      background: #eee9ff; color: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 15px;
+    }
+    .person .role { color: var(--muted); font-size: 13px; }
+    footer {
+      max-width: 960px; margin: 0 auto; padding: 28px 24px 56px;
+      color: var(--muted); font-size: 13px;
+      display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+    }
+    code { background: #f0f1f7; padding: 2px 6px; border-radius: 6px; font-size: 12px; }
   </style>
 </head>
 <body>
-  <h1>Salon Nord</h1>
-  <p>This page stands in for a customer's website. The chat bubble in the corner
-     is the entire integration &mdash; one <code>&lt;script&gt;</code> tag.</p>
-  <p>Try: <em>&ldquo;I'd like a haircut Thursday evening&rdquo;</em>, then confirm the
-     summary the assistant shows. Reload the page mid-conversation to watch the
-     durable event stream replay it.</p>
+  <header>
+    <div class="brand"><span class="brand-mark">N</span> Salon Nord</div>
+    <nav>
+      <a href="#services">Services</a>
+      <a href="#team">Team</a>
+      <a href="#visit">Visit</a>
+    </nav>
+  </header>
+
+  <div class="demo-note">
+    <span>💬 <b>Live demo</b> &mdash; the chat bubble in the corner is Kontor, embedded with one script tag</span>
+  </div>
+
+  <div class="hero">
+    <h1>Book your next appointment in a few messages.</h1>
+    <p>Salon Nord is a neighbourhood studio for haircuts and grooming. Ask our
+       assistant for a time that works &mdash; it checks real availability and
+       only books once you say yes.</p>
+    <div class="hero-meta">
+      <div><strong>Hours</strong>Tue&ndash;Sat, 09:00&ndash;18:00</div>
+      <div><strong>Location</strong>Torstra&szlig;e 12, Berlin</div>
+      <div><strong>Try asking</strong>&ldquo;A haircut Thursday evening?&rdquo;</div>
+    </div>
+  </div>
+
+  <section id="services">
+    <h2>Services</h2>
+    <div class="services">
+      <div class="service">
+        <div class="name">Haircut</div>
+        <div class="meta">45 minutes</div>
+        <div class="price">&euro;45</div>
+      </div>
+      <div class="service">
+        <div class="name">Beard trim</div>
+        <div class="meta">20 minutes</div>
+        <div class="price">&euro;25</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="team">
+    <h2>Meet the team</h2>
+    <div class="team">
+      <div class="person">
+        <div class="avatar">AR</div>
+        <div><div class="name">Alex Rivera</div><div class="role">Stylist</div></div>
+      </div>
+      <div class="person">
+        <div class="avatar">NP</div>
+        <div><div class="name">Nadia P.</div><div class="role">Stylist</div></div>
+      </div>
+    </div>
+  </section>
+
+  <footer id="visit">
+    <span>This page stands in for a customer&rsquo;s website; the widget is the only integration on it.</span>
+    <span>Reload mid-conversation to watch the durable event stream replay it.</span>
+  </footer>
+
   <script src="/widget/v1/kontor.js" defer></script>
 </body>
 </html>
