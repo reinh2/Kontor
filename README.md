@@ -9,9 +9,11 @@
 
 A customer writes *“Can I get a haircut Thursday evening?”*. Kontor checks the real catalogue, staff, opening hours, breaks, buffers and time zones, offers only genuine openings, shows the exact appointment, waits for an explicit *yes*, and only then writes to the schedule. Every model decision is persisted and inspectable.
 
-![Agent trace showing a customer conversation beside the model and tool timeline](docs/img/trace-live-full@2x.png)
+<p align="center">
+  <img src="docs/img/kontor-booking.gif" alt="A customer books a haircut through the embedded widget: the agent proposes an exact appointment, the customer confirms, and the booking is created" width="560">
+</p>
 
-*One timeline: the customer conversation, the agent's iterations, tool calls, retries, token usage, and outcome.*
+*Recorded against the stack `docker compose up` starts, on the deterministic local model — no API key. Nothing above is staged: the run leaves a `confirmed` row in `bookings` and processes both outbox jobs. Note the card — the appointment is fully specified and still not booked until the customer says so.*
 
 ## Try it in 30 seconds
 
@@ -37,6 +39,10 @@ Most “AI agent” demos let the model call a mutating API directly and hope th
 - **Durable delivery.** A committed turn is stored before SSE delivery, so a reconnecting widget replays from `Last-Event-ID` with no gaps and no phantom outcomes.
 
 ## More screens
+
+![Agent trace showing a customer conversation beside the model and tool timeline](docs/img/trace-live-full@2x.png)
+
+*Agent trace — one timeline for the customer conversation, the agent's iterations, tool calls, retries, token usage, and outcome.*
 
 <table>
   <tr>
